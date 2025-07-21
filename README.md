@@ -502,7 +502,7 @@ If you use this framework in your research, please cite:
 
 ```bibtex
 @article{karten2025llm,
-  title={LLM Economist: Large Population Models and Tax Mechanism Design in Multi-Agent Generative Simulacra},
+  title={LLM Economist: Large Population Models and Mechanism Design in Multi-Agent Generative Simulacra},
   author={Karten, Seth and Li, Wenzhe and Ding, Zihan and Kleiner, Samuel and Bai, Yu and Jin, Chi},
   journal={arXiv preprint arXiv:XXXX.XXXXX},
   year={2025}
