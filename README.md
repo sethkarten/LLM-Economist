@@ -5,6 +5,10 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](https://pytest.org/)
 [![arXiv](https://img.shields.io/badge/arXiv-2507.15815-b31b1b.svg)](https://arxiv.org/abs/2507.15815)
 
+<p align="center">
+  <img src="fig/llm_econ_fig1.jpg" alt="LLM Economist Figure 1" width="600"/>
+</p>
+
 A comprehensive framework for economic simulations using Large Language Models (LLMs). The LLM Economist leverages state-of-the-art language models to create realistic, dynamic economic simulations with diverse agent populations for studying tax policy optimization and mechanism design.
 
 ## 🚀 Features
