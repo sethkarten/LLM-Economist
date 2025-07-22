@@ -504,7 +504,7 @@ If you use this framework in your research, please cite:
 @article{karten2025llm,
   title={LLM Economist: Large Population Models and Mechanism Design in Multi-Agent Generative Simulacra},
   author={Karten, Seth and Li, Wenzhe and Ding, Zihan and Kleiner, Samuel and Bai, Yu and Jin, Chi},
-  journal={arXiv preprint arXiv:XXXX.XXXXX},
+  journal={arXiv preprint arXiv:2507.15815},
   year={2025}
 }
 ```
