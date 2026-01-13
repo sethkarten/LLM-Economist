@@ -87,30 +87,55 @@ sbatch experiments/jobs/E_million_agent.sh
 ```
 
 ### F-Series: RL Planner Training (REINFORCE++)
-Run with `experiments/jobs/launch_rl_training_h200.sh`
 
-**Architecture:**
-- Coordinator: 1 H200 GPU (policy updates, gradient aggregation)
-- Rollout Workers: N H200 GPUs (simulation, trajectory collection)
+**Motivation:** Zero-shot LLM planners show volatile behavior (regressive taxes, no convergence).
+REINFORCE++ finetuning should stabilize policy and improve SWF.
 
-**Training Config:**
-```yaml
-planner_model: Qwen/Qwen3-4B-Instruct  # Model to finetune
-worker_model: google/gemma-3-4b-it     # Fast model for agents
-num_agents: 1000                        # Agents per rollout
-max_timesteps: 500                      # Steps per rollout
-batch_size: 64                          # Rollouts per gradient update
-num_iterations: 100                     # Training iterations
-learning_rate: 1e-5
+#### F1: No Scaffolding (Raw Data Baseline)
+Planner receives raw economic data without structured prompts:
 ```
+Input: "agent_incomes: [45000, 72000, ...], gini: 0.38, total_labor: 3200, swf: 156.2"
+Output: "tax_rates: [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]"
+```
+
+#### F2: With Scaffolding (Structured Prompts)
+Planner receives formatted observations with context:
+```
+Input: "You are a tax policy planner optimizing social welfare...
+       Current economic state:
+       - Mean income: $58,500
+       - Gini coefficient: 0.38 (moderate inequality)
+       - Social welfare: 156.2
+       - Labor participation: 85%
+
+       Set tax rates to maximize social welfare while maintaining work incentives..."
+Output: {"tax_rates": [0.10, 0.15, ...], "reasoning": "..."}
+```
+
+**Hypothesis:** Scaffolding enables better credit assignment and faster learning.
+
+#### Training Config
+| Parameter | F1 (No Scaffold) | F2 (With Scaffold) |
+|-----------|------------------|---------------------|
+| planner_model | Qwen/Qwen3-4B-Instruct | Qwen/Qwen3-4B-Instruct |
+| worker_model | google/gemma-3-4b-it | google/gemma-3-4b-it |
+| num_agents | 1000 | 1000 |
+| max_timesteps | 500 | 500 |
+| batch_size | 64 | 64 |
+| num_iterations | 100 | 100 |
+| learning_rate | 1e-5 | 1e-5 |
+| prompt_type | raw | scaffolded |
 
 **Launch Commands:**
 ```bash
-# 8 rollout workers + 1 coordinator (9 H200 GPUs total)
-./experiments/jobs/launch_rl_training_h200.sh 8
+# F1: No scaffolding (raw data)
+./experiments/jobs/launch_rl_training_h200.sh 8 --no-scaffold
+
+# F2: With scaffolding (structured prompts)
+./experiments/jobs/launch_rl_training_h200.sh 8 --scaffold
 
 # 16 rollout workers (faster collection)
-./experiments/jobs/launch_rl_training_h200.sh 16
+./experiments/jobs/launch_rl_training_h200.sh 16 --scaffold
 ```
 
 ---
