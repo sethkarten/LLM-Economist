@@ -36,18 +36,21 @@ Key innovations include:
 
 ## 🛠️ Installation
 
-### Initialize Conda Environment
+### Initialize Environment (using uv)
 
 ```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Create and activate the environment
-conda create -n LLMEconomist python=3.11 -y
-conda activate LLMEconomist
+uv venv .venv
+source .venv/bin/activate
 ```
 
 ### Quick Install
 
 ```bash
-pip install llm-economist
+uv pip install llm-economist
 ```
 
 ### Development Install
@@ -55,7 +58,7 @@ pip install llm-economist
 ```bash
 git clone https://github.com/sethkarten/LLMEconomist.git
 cd LLMEconomist
-pip install -e .
+uv pip install -e .
 ```
 
 ### Dependencies
@@ -64,13 +67,13 @@ The framework supports multiple LLM providers. Install additional dependencies a
 
 ```bash
 # For local LLM serving
-pip install vllm ollama
+uv pip install vllm
 
 # For Google Gemini
-pip install google-generativeai
+uv pip install google-generativeai
 
 # For development
-pip install -e .[dev]
+uv pip install -e .[dev]
 ```
 
 ## 🚦 Quick Start
