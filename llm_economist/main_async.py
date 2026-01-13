@@ -370,11 +370,22 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         try:
             data = json.loads(response)
             new_rates = data.get('tax_rates', self.state.tax_rates)
-            # Validate rates (convert to float first to handle string responses)
+            # Validate rates (convert to float, handle strings like '10.0%' or '0.10')
             if len(new_rates) == len(self.state.tax_rates):
-                self.state.tax_rates = [max(0.0, min(0.99, float(r))) for r in new_rates]
+                parsed_rates = []
+                for r in new_rates:
+                    if isinstance(r, str):
+                        r = r.strip().rstrip('%')
+                        val = float(r)
+                        # If value > 1, assume it's a percentage (e.g., 10.0 -> 0.10)
+                        if val > 1:
+                            val = val / 100.0
+                    else:
+                        val = float(r)
+                    parsed_rates.append(max(0.0, min(0.99, val)))
+                self.state.tax_rates = parsed_rates
                 logger.info(f"Updated tax rates: {self.state.tax_rates}")
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             logger.warning(f"Failed to parse planner response: {e}")
 
     def _apply_taxes(self):
