@@ -36,38 +36,43 @@ Key innovations include:
 
 ## 🛠️ Installation
 
-### Initialize Environment (using uv)
+### Initialize Environment (using uv - recommended)
 
 ```bash
 # Install uv if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create and activate the environment
-uv venv .venv
+# Clone the repository
+git clone https://github.com/sethkarten/ai-econ.git
+cd ai-econ/LLM-Economist
+
+# Create virtual environment with Python 3.11
+uv venv .venv --python 3.11
 source .venv/bin/activate
-```
 
-### Quick Install
-
-```bash
-uv pip install llm-economist
-```
-
-### Development Install
-
-```bash
-git clone https://github.com/sethkarten/LLMEconomist.git
-cd LLMEconomist
+# Install the package with all dependencies
 uv pip install -e .
+
+# For local vLLM inference (recommended for large-scale experiments)
+uv pip install vllm>=0.13.0
+```
+
+### Alternative: Conda Environment
+
+```bash
+conda create -n llmecon python=3.11 -y
+conda activate llmecon
+pip install -e .
+pip install vllm>=0.13.0
 ```
 
 ### Dependencies
 
-The framework supports multiple LLM providers. Install additional dependencies as needed:
+The framework supports multiple LLM providers:
 
 ```bash
-# For local LLM serving
-uv pip install vllm
+# For local LLM serving (recommended)
+uv pip install vllm>=0.13.0
 
 # For Google Gemini
 uv pip install google-generativeai
@@ -250,6 +255,61 @@ python -m llm_economist.main --prompt-algo io --llm gpt-4o-mini
 
 # Large scale simulation
 python -m llm_economist.main --num-agents 100 --max-timesteps 2000
+```
+
+## 🚀 Large-Scale Async Infrastructure
+
+For experiments with 100+ agents, use the async infrastructure with vLLM batching.
+
+### Supported Local Models (RTX 5090/Blackwell)
+
+| Model | Quantization | Throughput | Notes |
+|-------|--------------|------------|-------|
+| `gemma3-4b` | BF16 text-only | **92.0 req/s** | Fastest |
+| `mistral-7b-v0.3` | AWQ | 67.1 req/s | Good balance |
+| `llama-3.1-8b` | AWQ | 65.9 req/s | Meta flagship |
+| `qwen3-8b` | AWQ | 60.5 req/s | Strong reasoning |
+| `olmo3-7b` | FP8 | 31.5 req/s | Fully open |
+
+### Local Experiments (100 agents)
+
+```bash
+# Run bounded rationality experiments (5 models × 3 seeds)
+python experiments/run_bounded_experiments.py --list    # Check status
+python experiments/run_bounded_experiments.py --all     # Run all
+python experiments/run_bounded_experiments.py --model gemma3-4b  # Specific model
+```
+
+### H200 Cluster Experiments (1M agents)
+
+```bash
+# Submit 1M agent experiments (requires ailab partition access)
+./experiments/jobs/launch_million_agent.sh
+
+# Submit RL planner training (8 rollout workers)
+./experiments/jobs/launch_rl_training_h200.sh 8
+```
+
+### Async Simulation API
+
+```python
+from llm_economist.main_async import AsyncLLMEconomist
+
+# Create async simulator
+simulator = AsyncLLMEconomist(
+    num_agents=1000,
+    max_timesteps=2000,
+    model_name="gemma3-4b",
+    tensor_parallel_size=1,
+    scenario="bounded",
+    quantization="none",  # BF16 for Gemma-3
+    seed=42,
+)
+
+# Run simulation
+await simulator.initialize()
+metrics = await simulator.run()
+simulator.save_results("results.json")
 ```
 
 ## 📈 Examples
