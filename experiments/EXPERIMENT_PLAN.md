@@ -206,6 +206,121 @@ reward -= 0.1 * max(0, -labor_change/total)    # Penalize labor reduction
 
 ---
 
+## G-Series: RL AI Economist Baseline
+
+**Goal:** Establish baseline for RL-trained policies before REINFORCE++ finetuning of LLM planners.
+
+### G1: Full RL Training (Both Planner + Workers)
+Train both planner AND workers using standard RL (not LLMs):
+- **Planner**: Small NN policy (3-layer MLP)
+- **Workers**: Small NN policies (2-layer MLP per worker)
+- **Training**: Standard PPO on rational utility functions
+- **Purpose**: Upper bound on what pure RL can achieve
+
+**Why this matters:** Shows limitations when RL-trained policies face bounded rational LLM agents at test time (distribution shift).
+
+### G2: Evaluation with Bounded Rational LLM Agents
+Take G1 trained policies, evaluate with:
+- **Planner**: RL-trained NN policy (frozen)
+- **Workers**: LLM agents with bounded rationality (same as our experiments)
+- **Expected result**: Performance degradation due to distribution mismatch
+
+### Training Setup
+```yaml
+# G1: RL Training (Rational Setting)
+planner: 3-layer MLP (hidden_dim=256)
+workers: 2-layer MLPs (hidden_dim=128)
+algorithm: PPO
+num_agents: 1000
+training_steps: 1M
+batch_size: 2048
+learning_rate: 3e-4
+```
+
+### Evaluation Setup
+```yaml
+# G2: Eval with LLM Workers
+planner: Trained NN policy (frozen)
+workers: LLM (gemma-3-4b with bounded rationality)
+num_agents: 1000
+eval_episodes: 10
+```
+
+**Launch Commands:**
+```bash
+# G1: Train RL baseline
+python -m llm_economist.training.rl_baseline \
+    --num-agents 1000 \
+    --training-steps 1000000 \
+    --output models/rl_baseline/
+
+# G2: Evaluate with LLM workers
+python -m llm_economist.training.evaluate_rl_baseline \
+    --checkpoint models/rl_baseline/best.pt \
+    --worker-model gemma-3-4b \
+    --num-agents 1000 \
+    --output results/rl_baseline_llm_eval.json
+```
+
+---
+
+## H-Series: REINFORCE++ for LLM Planners
+
+**Goal:** Finetune LLM planners (while keeping LLM workers frozen) to improve over zero-shot baseline.
+
+### Motivation from Bounded Rationality Results
+Zero-shot LLM planners show:
+- **Regressive taxes** (Gemma seed=123: 62% lowest bracket, 45% highest)
+- **No convergence** (Mistral: SWF decreased in 2/3 runs)
+- **High volatility** (SWF spikes to 600+, then crashes)
+
+REINFORCE++ should stabilize and improve policies.
+
+### H1: REINFORCE++ with Scaffolding
+```yaml
+planner: Qwen/Qwen3-4B-Instruct (finetune)
+workers: gemma-3-4b (frozen, bounded rational)
+prompt_type: scaffolded
+num_agents: 1000
+max_timesteps: 500
+batch_size: 64
+num_iterations: 100
+learning_rate: 1e-5
+```
+
+### H2: REINFORCE++ No Scaffolding
+```yaml
+planner: Qwen/Qwen3-4B-Instruct (finetune)
+workers: gemma-3-4b (frozen, bounded rational)
+prompt_type: raw
+# ... same other params ...
+```
+
+**Launch Commands:**
+```bash
+# H1: With scaffolding
+./experiments/jobs/launch_rl_training_h200.sh 8 --scaffold
+
+# H2: No scaffolding
+./experiments/jobs/launch_rl_training_h200.sh 8 --no-scaffold
+```
+
+### Expected Results
+| Method | Planner | Workers | Final SWF | Stability |
+|--------|---------|---------|-----------|-----------|
+| Zero-shot | LLM (no training) | LLM (bounded) | ~180 ± 50 | Volatile |
+| RL Baseline (G1) | NN (trained rational) | NN (rational) | ~250 | Stable |
+| RL Baseline (G2) | NN (trained rational) | LLM (bounded) | ~200 | Degraded |
+| REINFORCE++ H1 | LLM (finetuned) | LLM (bounded) | ~240 | Stable |
+| REINFORCE++ H2 | LLM (finetuned, raw) | LLM (bounded) | ~220 | Moderate |
+
+**Key Insights:**
+1. G1 vs G2 shows distribution shift problem (RL trained on rational, fails on bounded)
+2. H1 shows REINFORCE++ can match RL baseline while handling bounded rationality
+3. H2 shows scaffolding helps (+20 SWF improvement)
+
+---
+
 ## Job File Reference
 
 | File | Purpose | Hardware |
