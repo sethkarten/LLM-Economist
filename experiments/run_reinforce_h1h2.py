@@ -73,8 +73,8 @@ rates={current_rates}
 class RLConfig:
     """Configuration for REINFORCE++ training."""
     experiment: str = "h1"  # h1 or h2
-    planner_model: str = "gemma3-4b"
-    worker_model: str = "gemma3-4b"
+    planner_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    worker_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
 
     # Environment
     num_agents: int = 100
