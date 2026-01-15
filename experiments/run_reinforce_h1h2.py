@@ -15,7 +15,7 @@ Usage:
 
 # Disable Triton compilation to avoid gcc issues on Pikachu
 import os
-os.environ['VLLM_ATTENTION_BACKEND'] = 'XFORMERS'
+os.environ['VLLM_ATTENTION_BACKEND'] = 'TORCH_SDPA'  # Use PyTorch SDPA (stable, no compile)
 os.environ['VLLM_USE_V1'] = '0'  # Use legacy vLLM API to avoid compilation
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 
