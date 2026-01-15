@@ -13,6 +13,10 @@ Usage:
     CUDA_VISIBLE_DEVICES=1 python experiments/run_reinforce_h1h2.py --experiment h2
 """
 
+# Use vLLM legacy API to avoid V1 compilation issues
+import os
+os.environ['VLLM_USE_V1'] = '0'
+
 import argparse
 import asyncio
 import json
