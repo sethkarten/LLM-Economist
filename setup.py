@@ -17,6 +17,7 @@ setup(
         "matplotlib>=3.3.0",
         "seaborn>=0.11.0",
         "tqdm>=4.60.0",
+        "wandb>=0.15.0",
     ],
     python_requires=">=3.8",
 )
