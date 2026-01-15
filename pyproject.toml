@@ -24,4 +24,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["llm_economist"]
+packages = {find = {}}
+
+[tool.uv]
+dev-dependencies = []
