@@ -19,8 +19,5 @@ echo "WANDB_MODE: $WANDB_MODE"
 echo "Working directory: $(pwd)"
 echo ""
 
-# Activate pre-installed venv
-source .venv/bin/activate
-
-# Run experiment
-python experiments/run_reinforce_h1h2.py "$@"
+# Run experiment with uv python
+uv run python experiments/run_reinforce_h1h2.py "$@"

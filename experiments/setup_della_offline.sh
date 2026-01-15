@@ -31,16 +31,13 @@ cd "$WORK_DIR"
 echo "Creating virtual environment with uv..."
 uv venv .venv --python 3.10
 
-# Activate venv
-source .venv/bin/activate
-
 # Install dependencies
 echo "Installing dependencies..."
 uv pip install -e .
 
 # Pre-download Gemma-3-4B model to HF cache
 echo "Pre-downloading Gemma-3-4B model..."
-python -c "
+uv run python -c "
 from huggingface_hub import snapshot_download
 import os
 os.environ['HF_HOME'] = '$HF_CACHE'
