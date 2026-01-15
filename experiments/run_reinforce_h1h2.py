@@ -13,10 +13,15 @@ Usage:
     CUDA_VISIBLE_DEVICES=1 python experiments/run_reinforce_h1h2.py --experiment h2
 """
 
+# Disable Triton compilation to avoid gcc issues on Pikachu
+import os
+os.environ['VLLM_ATTENTION_BACKEND'] = 'XFORMERS'
+os.environ['VLLM_USE_V1'] = '0'  # Use legacy vLLM API to avoid compilation
+os.environ['TORCH_COMPILE_DISABLE'] = '1'
+
 import argparse
 import asyncio
 import json
-import os
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
