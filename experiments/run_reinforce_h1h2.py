@@ -252,6 +252,7 @@ class REINFORCEExperiment:
             tensor_parallel_size=1,
             max_model_len=4096,
             text_only_mode=model_config.text_only_mode,
+            enforce_eager=True,  # Avoid torch compile issues on Pikachu
         )
 
         # Use same engine for workers (self-play)
