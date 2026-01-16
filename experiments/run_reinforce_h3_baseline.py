@@ -148,7 +148,7 @@ class REINFORCEExperiment:
         self.planner_engine = None
         self.worker_engine = None
 
-    async def setup(self):
+    async def setup(self, skip_baseline=False):
         """Initialize inference engines and compute baseline."""
         from llm_economist.inference.async_engine import ScalableInferenceEngine
         from llm_economist.inference.config import get_model_config
@@ -190,11 +190,14 @@ class REINFORCEExperiment:
         print("Engines loaded.\n")
 
         # Compute baseline metrics using US federal tax (2024 rates)
-        print("Computing baseline (US federal progressive tax 2024)...")
-        self.baseline_metrics = await self._compute_baseline()
-        print(f"Baseline SWF: {self.baseline_metrics['swf']:.2f}")
-        print(f"Baseline Gini: {self.baseline_metrics['gini']:.3f}")
-        print(f"Baseline Labor: {self.baseline_metrics['mean_labor']:.1f} hours/week\n")
+        if not skip_baseline:
+            print("Computing baseline (US federal progressive tax 2024)...")
+            self.baseline_metrics = await self._compute_baseline()
+            print(f"Baseline SWF: {self.baseline_metrics['swf']:.2f}")
+            print(f"Baseline Gini: {self.baseline_metrics['gini']:.3f}")
+            print(f"Baseline Labor: {self.baseline_metrics['mean_labor']:.1f} hours/week\n")
+        else:
+            print("Skipping baseline computation (will load from checkpoint)\n")
 
     async def _compute_baseline(self) -> Dict[str, float]:
         """
@@ -495,6 +498,7 @@ Hours to work this week (0-100)? Number only:"""
             "iteration": self.iteration,
             "best_reward": self.best_reward,
             "metrics_history": self.metrics_history,
+            "baseline_metrics": self.baseline_metrics,  # Cache baseline
         }
 
         with open(checkpoint_dir / "state.json", "w") as f:
@@ -515,10 +519,14 @@ Hours to work this week (0-100)? Number only:"""
         self.iteration = state.get("iteration", 0) + 1  # Resume from next iteration
         self.best_reward = state.get("best_reward", float("-inf"))
         self.metrics_history = state.get("metrics_history", [])
+        self.baseline_metrics = state.get("baseline_metrics")  # Load cached baseline
 
         print(f"Resumed from checkpoint: {checkpoint_path}")
         print(f"  Starting at iteration {self.iteration}")
         print(f"  Best reward so far: {self.best_reward:.3f}")
+
+        if self.baseline_metrics:
+            print(f"  Loaded cached baseline: SWF={self.baseline_metrics['swf']:.2f}, Gini={self.baseline_metrics['gini']:.3f}")
 
         return True
 
@@ -561,11 +569,16 @@ async def main():
     experiment = REINFORCEExperiment(config, output_dir)
 
     try:
-        await experiment.setup()
-
-        # Resume from checkpoint if specified
+        # Load checkpoint first if resuming
+        skip_baseline = False
         if args.resume:
-            experiment.load_checkpoint(args.resume)
+            success = experiment.load_checkpoint(args.resume)
+            # Skip baseline computation if it was cached in checkpoint
+            if success and experiment.baseline_metrics is not None:
+                skip_baseline = True
+                print("Using cached baseline from checkpoint (skipping expensive recomputation)\n")
+
+        await experiment.setup(skip_baseline=skip_baseline)
 
         await experiment.train()
     finally:
