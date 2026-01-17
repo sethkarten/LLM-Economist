@@ -327,6 +327,20 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
         chat_template="llama",
         notes="Current baseline model"
     ),
+    "llama32-1b": ModelConfig(
+        name="Llama-3.2-1B",
+        hf_name="meta-llama/Llama-3.2-1B",
+        total_params=1.0,
+        active_params=1.0,
+        architecture="dense",
+        context_length=128000,
+        recommended_quantization=QuantizationType.NONE,
+        vram_fp16=3.0,
+        vram_int4=1.5,
+        supports_thinking=False,
+        chat_template="llama",
+        notes="Tiny model for worker inference"
+    ),
 }
 
 
