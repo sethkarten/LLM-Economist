@@ -156,27 +156,28 @@ class PlannerPolicy:
         print(f"Loading trainable planner: {self.model_name}")
 
         # Use cached models (SLURM nodes have no internet)
-        # Models are cached in /scratch/gpfs/CHIJ/milkkarten/huggingface/hub/
-        cache_dir = "/scratch/gpfs/CHIJ/milkkarten/huggingface"
+        # For offline mode, use the snapshot directory directly instead of model name
+        # This avoids transformers trying to contact HuggingFace API
+        model_cache_path = "/scratch/gpfs/CHIJ/milkkarten/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767"
 
-        # Load tokenizer from cache
+        print(f"Loading from snapshot: {model_cache_path}")
+
+        # Load tokenizer from snapshot
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name,
+            model_cache_path,
             trust_remote_code=True,
             local_files_only=True,
-            cache_dir=cache_dir,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load base model in bfloat16 from cache
+        # Load base model in bfloat16 from snapshot
         self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
+            model_cache_path,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
             local_files_only=True,
-            cache_dir=cache_dir,
         )
 
         # Add LoRA adapters
