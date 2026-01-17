@@ -400,13 +400,9 @@ class REINFORCEExperiment:
 
         # Load vLLM engine for workers (fast parallel inference)
         model_config = get_model_config(self.config.worker_model)
-        quant = model_config.recommended_quantization
-        if hasattr(quant, 'value'):
-            quant_str = quant.value
-        else:
-            quant_str = str(quant)
-        if quant_str.lower() == 'none':
-            quant_str = None
+
+        # Override quantization to None for offline mode (cached model is base FP16)
+        quant_str = None
 
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...")
 
