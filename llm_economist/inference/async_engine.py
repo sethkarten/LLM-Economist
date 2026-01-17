@@ -148,6 +148,8 @@ class ScalableInferenceEngine:
             'swap_space': swap_space,
             'enforce_eager': final_enforce_eager,
             'trust_remote_code': True,
+            'tokenizer_mode': 'auto',
+            'download_dir': os.path.expanduser('~/.cache/huggingface'),
         }
 
         # Add text-only mode for multimodal models (e.g., Gemma 3)
@@ -169,13 +171,6 @@ class ScalableInferenceEngine:
         """Lazily initialize the vLLM engine."""
         if self._initialized:
             return
-
-        # CRITICAL: Disable HuggingFace offline mode for SLURM compute nodes
-        # This must be done before any transformers/vllm imports
-        if 'HF_HUB_OFFLINE' in os.environ:
-            del os.environ['HF_HUB_OFFLINE']
-        os.environ['TRANSFORMERS_OFFLINE'] = '0'
-        os.environ['HF_DATASETS_OFFLINE'] = '0'
 
         try:
             from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
