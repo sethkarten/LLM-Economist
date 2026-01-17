@@ -170,6 +170,13 @@ class ScalableInferenceEngine:
         if self._initialized:
             return
 
+        # CRITICAL: Disable HuggingFace offline mode for SLURM compute nodes
+        # This must be done before any transformers/vllm imports
+        if 'HF_HUB_OFFLINE' in os.environ:
+            del os.environ['HF_HUB_OFFLINE']
+        os.environ['TRANSFORMERS_OFFLINE'] = '0'
+        os.environ['HF_DATASETS_OFFLINE'] = '0'
+
         try:
             from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
             self._SamplingParams = SamplingParams
