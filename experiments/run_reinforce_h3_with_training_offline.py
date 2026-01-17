@@ -417,6 +417,7 @@ class REINFORCEExperiment:
             max_model_len=4096,
             text_only_mode=model_config.text_only_mode,
             enforce_eager=True,
+            enable_prefix_caching=False,  # Gemma-3 has sliding window, incompatible with prefix caching
         )
 
         print("Worker engine loaded.\n")
