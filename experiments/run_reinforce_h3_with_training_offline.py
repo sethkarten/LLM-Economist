@@ -19,6 +19,8 @@ Usage:
 import os
 os.environ['VLLM_USE_V1'] = '0'
 os.environ['HF_DATASETS_OFFLINE'] = '1'  # SLURM nodes don't have internet
+os.environ['HF_HUB_OFFLINE'] = '1'  # Prevent HuggingFace API calls
+os.environ['TRANSFORMERS_OFFLINE'] = '1'  # Force transformers to use cache only
 
 import argparse
 import asyncio
