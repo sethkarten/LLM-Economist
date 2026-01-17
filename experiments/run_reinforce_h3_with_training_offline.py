@@ -70,8 +70,8 @@ Output: {{"tax_rates": [rate1, rate2, ...], "brackets": [threshold1, threshold2,
 class RLConfig:
     """Configuration for REINFORCE++ H3 training."""
     experiment: str = "h3"
-    planner_model: str = "meta-llama/Llama-3.1-8B-Instruct"
-    worker_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+    planner_model: str = "meta-llama/Llama-3.1-8B-Instruct"  # Trainable with LoRA
+    worker_model: str = "meta-llama/Llama-3.2-1B"  # Smaller for vLLM to fit on same GPU
 
     # Environment
     num_agents: int = 100
@@ -410,7 +410,7 @@ class REINFORCEExperiment:
             model_name=model_config.hf_name,
             quantization=quant_str,
             tensor_parallel_size=1,
-            gpu_memory_utilization=0.4,  # Leave room for trainable planner (takes ~9GB)
+            gpu_memory_utilization=0.7,  # Smaller worker model (3GB) + planner (9GB) = ~12GB total
             max_model_len=4096,
             text_only_mode=model_config.text_only_mode,
             enforce_eager=True,
