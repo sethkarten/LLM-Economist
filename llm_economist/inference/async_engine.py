@@ -135,6 +135,9 @@ class ScalableInferenceEngine:
         final_enforce_eager = enforce_eager if enforce_eager is not None else False
 
         # Store config for lazy initialization
+        # Use HF_HOME env var for download dir, fallback to default
+        download_dir = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
+
         self._config = {
             'model': model_name,
             'tensor_parallel_size': tensor_parallel_size,
@@ -149,7 +152,7 @@ class ScalableInferenceEngine:
             'enforce_eager': final_enforce_eager,
             'trust_remote_code': True,
             'tokenizer_mode': 'auto',
-            'download_dir': os.path.expanduser('~/.cache/huggingface'),
+            'download_dir': download_dir,
         }
 
         # Add text-only mode for multimodal models (e.g., Gemma 3)
