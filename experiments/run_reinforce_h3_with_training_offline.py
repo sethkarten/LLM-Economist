@@ -156,8 +156,8 @@ class PlannerPolicy:
         print(f"Loading trainable planner: {self.model_name}")
 
         # Use cached models (SLURM nodes have no internet)
-        # Models are pre-cached by vLLM in ~/.cache/huggingface/
-        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        # Models are cached in /scratch/gpfs/CHIJ/milkkarten/huggingface/hub/
+        cache_dir = "/scratch/gpfs/CHIJ/milkkarten/huggingface"
 
         # Load tokenizer from cache
         self.tokenizer = AutoTokenizer.from_pretrained(
