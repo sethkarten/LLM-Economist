@@ -827,7 +827,7 @@ Hours to work this week (0-100)? Number only:"""
         print(f"  Saved: {checkpoint_dir}")
 
     def load_checkpoint(self, checkpoint_path: str) -> bool:
-        """Load training state from checkpoint. Returns True if successful."""
+        """Load training state from checkpoint (metadata only). Returns True if successful."""
         state_file = Path(checkpoint_path) / "state.json"
         if not state_file.exists():
             print(f"No checkpoint found at {checkpoint_path}")
@@ -848,13 +848,24 @@ Hours to work this week (0-100)? Number only:"""
         if self.baseline_metrics:
             print(f"  Loaded cached baseline: SWF={self.baseline_metrics['swf']:.2f}, Gini={self.baseline_metrics['gini']:.3f}")
 
+        # Store checkpoint path for loading model weights after setup()
+        self.checkpoint_path = checkpoint_path
+
+        return True
+
+    def load_model_weights(self):
+        """Load LoRA weights and optimizer state (call after setup())."""
+        if not hasattr(self, 'checkpoint_path') or not self.checkpoint_path:
+            return
+
         # Load LoRA weights
-        lora_path = Path(checkpoint_path) / "planner_lora"
+        lora_path = Path(self.checkpoint_path) / "planner_lora"
         if lora_path.exists():
             self.planner_policy.load_lora_weights(lora_path)
+            print(f"  Loaded LoRA weights from {lora_path}")
 
         # Load optimizer state
-        optimizer_path = Path(checkpoint_path) / "optimizer.pt"
+        optimizer_path = Path(self.checkpoint_path) / "optimizer.pt"
         if optimizer_path.exists():
             checkpoint = torch.load(optimizer_path)
             self.optimizer.load_state_dict(checkpoint["optimizer"])
@@ -907,7 +918,7 @@ async def main():
     experiment = REINFORCEExperiment(config, output_dir)
 
     try:
-        # Load checkpoint first if resuming
+        # Load checkpoint metadata first if resuming
         skip_baseline = False
         if args.resume:
             success = experiment.load_checkpoint(args.resume)
@@ -916,7 +927,12 @@ async def main():
                 skip_baseline = True
                 print("Using cached baseline from checkpoint (skipping expensive recomputation)\n")
 
+        # Setup model and engines
         await experiment.setup(skip_baseline=skip_baseline)
+
+        # Load model weights after setup (if resuming)
+        if args.resume:
+            experiment.load_model_weights()
 
         await experiment.train()
     finally:

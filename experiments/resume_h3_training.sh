@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=72:00:00
-#SBATCH --output=/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/slurm-h3-800-seed%a-%j.out
+#SBATCH --output=/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/slurm-h3-800-%j.out
 
 # Resume H3 REINFORCE++ training from iteration 100 -> 800
 # Stage 1 of extended training (stays in faster QOS queue with <72h limit)
