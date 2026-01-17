@@ -153,20 +153,28 @@ class PlannerPolicy:
 
         print(f"Loading trainable planner: {self.model_name}")
 
-        # Load tokenizer
+        # Use cached models (SLURM nodes have no internet)
+        # Models are pre-cached by vLLM in ~/.cache/huggingface/
+        cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+
+        # Load tokenizer from cache
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_name,
-            trust_remote_code=True
+            trust_remote_code=True,
+            local_files_only=True,
+            cache_dir=cache_dir,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load base model in bfloat16
+        # Load base model in bfloat16 from cache
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
+            local_files_only=True,
+            cache_dir=cache_dir,
         )
 
         # Add LoRA adapters
