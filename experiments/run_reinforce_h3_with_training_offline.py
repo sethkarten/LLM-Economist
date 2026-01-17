@@ -18,11 +18,14 @@ Usage:
 # Use vLLM legacy API to avoid V1 compilation issues
 import os
 os.environ['VLLM_USE_V1'] = '0'
-# CRITICAL: Allow online mode for tokenizer initialization
-# Models are cached locally, but transformers needs to check HF Hub for metadata
-os.environ['HF_DATASETS_OFFLINE'] = '0'
-os.environ['HF_HUB_OFFLINE'] = '0'
-os.environ['TRANSFORMERS_OFFLINE'] = '0'
+# CRITICAL: Force offline mode and use cached models only
+# SLURM compute nodes have NO internet access
+os.environ['HF_DATASETS_OFFLINE'] = '1'
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+# Point to HuggingFace cache directory (models are pre-downloaded)
+os.environ['HF_HOME'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface'
+os.environ['TRANSFORMERS_CACHE'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface/hub'
 
 import argparse
 import asyncio
