@@ -410,7 +410,7 @@ class REINFORCEExperiment:
             model_name=model_config.hf_name,
             quantization=quant_str,
             tensor_parallel_size=1,
-            gpu_memory_utilization=0.7,  # Smaller worker model (3GB) + planner (9GB) = ~12GB total
+            gpu_memory_utilization=0.45,  # Planner loads first (9GB), leave enough for worker+KV cache
             max_model_len=4096,
             text_only_mode=model_config.text_only_mode,
             enforce_eager=True,
