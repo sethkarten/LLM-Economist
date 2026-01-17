@@ -70,8 +70,8 @@ Output: {{"tax_rates": [rate1, rate2, ...], "brackets": [threshold1, threshold2,
 class RLConfig:
     """Configuration for REINFORCE++ H3 training."""
     experiment: str = "h3"
-    planner_model: str = "google/gemma-3-4b-it"
-    worker_model: str = "google/gemma-3-4b-it"
+    planner_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+    worker_model: str = "meta-llama/Llama-3.1-8B-Instruct"
 
     # Environment
     num_agents: int = 100
@@ -158,7 +158,7 @@ class PlannerPolicy:
         # Use cached models (SLURM nodes have no internet)
         # For offline mode, use the snapshot directory directly instead of model name
         # This avoids transformers trying to contact HuggingFace API
-        model_cache_path = "/scratch/gpfs/CHIJ/milkkarten/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767"
+        model_cache_path = "/scratch/gpfs/CHIJ/milkkarten/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
 
         print(f"Loading from snapshot: {model_cache_path}")
 
