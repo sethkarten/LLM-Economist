@@ -409,10 +409,25 @@ class REINFORCEExperiment:
         # Override quantization to None for offline mode (cached model is base FP16)
         quant_str = None
 
+        # CRITICAL: In offline mode, use full path to cached snapshot
+        worker_model_path = model_config.hf_name
+        if os.environ.get('HF_HUB_OFFLINE') == '1':
+            # Convert model name to cached snapshot path
+            hf_cache = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
+            model_cache_dir = os.path.join(hf_cache, 'hub', f"models--{model_config.hf_name.replace('/', '--')}")
+            if os.path.exists(model_cache_dir):
+                snapshots_dir = os.path.join(model_cache_dir, 'snapshots')
+                if os.path.exists(snapshots_dir):
+                    # Use the first (and usually only) snapshot
+                    snapshots = os.listdir(snapshots_dir)
+                    if snapshots:
+                        worker_model_path = os.path.join(snapshots_dir, snapshots[0])
+                        print(f"Offline mode: using cached model at {worker_model_path}")
+
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...")
 
         self.worker_engine = ScalableInferenceEngine(
-            model_name=model_config.hf_name,
+            model_name=worker_model_path,
             quantization=quant_str,
             tensor_parallel_size=1,
             gpu_memory_utilization=0.45,  # Planner loads first (9GB), leave enough for worker+KV cache
