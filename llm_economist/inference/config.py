@@ -218,7 +218,7 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
         vram_int4=3.0,
         supports_thinking=False,
         chat_template="gemma",
-        text_only_mode=True,  # Required for Blackwell - disables vision encoder
+        text_only_mode=False,  # Not a multimodal model
         notes="RTX 5090: 92.0 req/s with BF16 text-only - FASTEST MODEL"
     ),
 
@@ -235,7 +235,7 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
         vram_int4=7.0,
         supports_thinking=False,
         chat_template="gemma",
-        text_only_mode=True,  # Required for Blackwell - disables vision encoder
+        text_only_mode=False,  # Not a multimodal model
         notes="RTX 5090: 65.8 req/s with BF16 text-only, higher quality than 4B"
     ),
 
