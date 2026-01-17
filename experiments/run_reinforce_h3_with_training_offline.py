@@ -410,6 +410,7 @@ class REINFORCEExperiment:
             model_name=model_config.hf_name,
             quantization=quant_str,
             tensor_parallel_size=1,
+            gpu_memory_utilization=0.4,  # Leave room for trainable planner (takes ~9GB)
             max_model_len=4096,
             text_only_mode=model_config.text_only_mode,
             enforce_eager=True,
