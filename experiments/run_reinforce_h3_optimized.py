@@ -111,7 +111,7 @@ class RLConfig:
     lora_dropout: float = 0.05
 
     # GPU optimization
-    gpu_memory_utilization: float = 0.85  # ⚡ OPTIMIZED: 0.45→0.85 for A6000
+    gpu_memory_utilization: float = 0.45  # Share GPU with planner (22GB planner + 21GB vLLM = 43GB total)
     enable_prefix_caching: bool = True  # ⚡ OPTIMIZED: Cache repeated prompts
 
     # Checkpointing
