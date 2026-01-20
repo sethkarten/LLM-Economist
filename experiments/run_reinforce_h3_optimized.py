@@ -26,7 +26,12 @@ os.environ['VLLM_USE_V1'] = '0'
 # CRITICAL: Disable PyTorch compilation to avoid 10+ min hang
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 os.environ['TORCHDYNAMO_DISABLE'] = '1'
-# CRITICAL: Only use offline mode on SLURM (compute nodes have no internet)
+# CRITICAL: Enable offline mode if HF_TOKEN not set (use cached models for gated repos)
+if not os.environ.get('HF_TOKEN'):
+    print("[STARTUP] HF_TOKEN not set - enabling offline mode for cached models", flush=True)
+    os.environ['HF_HUB_OFFLINE'] = '1'
+    os.environ['TRANSFORMERS_OFFLINE'] = '1'
+# CRITICAL: Additional offline settings for SLURM (compute nodes have no internet)
 if 'SLURM_JOB_ID' in os.environ:
     os.environ['HF_DATASETS_OFFLINE'] = '1'
     os.environ['HF_HUB_OFFLINE'] = '1'
