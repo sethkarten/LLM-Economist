@@ -185,7 +185,11 @@ class VLLMServerEngine:
         latencies = []
         is_json_valid = []
 
-        async with aiohttp.ClientSession() as session:
+        # Limit concurrent requests to avoid overwhelming the server
+        max_concurrent = 20  # Process in batches of 20
+        connector = aiohttp.TCPConnector(limit=max_concurrent)
+
+        async with aiohttp.ClientSession(connector=connector) as session:
             tasks = []
             for i, prompt in enumerate(batch.prompts):
                 # Combine system prompt with user prompt for completions API
@@ -201,7 +205,13 @@ class VLLMServerEngine:
                 )
                 tasks.append(task)
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Process in chunks to avoid overwhelming the server
+            results = []
+            for chunk_start in range(0, len(tasks), max_concurrent):
+                chunk_end = min(chunk_start + max_concurrent, len(tasks))
+                chunk_tasks = tasks[chunk_start:chunk_end]
+                chunk_results = await asyncio.gather(*chunk_tasks, return_exceptions=True)
+                results.extend(chunk_results)
 
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
