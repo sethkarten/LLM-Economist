@@ -465,11 +465,32 @@ class ScalableInferenceEngine:
         }
 
     async def shutdown(self):
-        """Shutdown the engine."""
+        """Shutdown the engine and free GPU memory."""
+        import gc
+        import torch
+
         if self._engine is not None:
-            # vLLM doesn't have explicit shutdown, but we can clean up
+            logger.info("Shutting down vLLM engine and freeing GPU memory...")
+            print("[ScalableInferenceEngine] Shutting down and freeing GPU memory...", flush=True)
+
+            # Delete the engine reference
+            del self._engine
             self._engine = None
             self._initialized = False
+
+            # Force garbage collection
+            gc.collect()
+
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+            # Give time for subprocesses to clean up
+            import asyncio
+            await asyncio.sleep(2)
+
+            print("[ScalableInferenceEngine] Shutdown complete", flush=True)
 
 
 class AgentBatcher:

@@ -514,6 +514,10 @@ class REINFORCEExperiment:
         self.planner_policy = None  # Trainable torch model
         self.worker_engine = None   # vLLM for fast worker inference
 
+        # Worker engine config (for restart in 1-GPU mode)
+        self._worker_engine_config = None
+        self._use_2gpu_mode = False
+
         # Training
         self.optimizer = None
         self.scheduler = None
@@ -601,17 +605,20 @@ class REINFORCEExperiment:
             print(f"✓ 1-GPU mode: worker and planner sharing cuda:0")
             print(f"  Worker GPU memory: {worker_gpu_mem} (shared with planner)")
 
-            self.worker_engine = ScalableInferenceEngine(
-                model_name=worker_model_path,
-                quantization=quant_str,
-                tensor_parallel_size=1,
-                gpu_memory_utilization=worker_gpu_mem,
-                max_model_len=4096,
-                text_only_mode=model_config.text_only_mode,
-                enforce_eager=True,
-                enable_prefix_caching=self.config.enable_prefix_caching,
-                enable_chunked_prefill=False,
-            )
+            # Store config for engine restart (needed for 1-GPU mode memory management)
+            self._worker_engine_config = {
+                'model_name': worker_model_path,
+                'quantization': quant_str,
+                'tensor_parallel_size': 1,
+                'gpu_memory_utilization': worker_gpu_mem,
+                'max_model_len': 4096,
+                'text_only_mode': model_config.text_only_mode,
+                'enforce_eager': True,
+                'enable_prefix_caching': self.config.enable_prefix_caching,
+                'enable_chunked_prefill': False,
+            }
+
+            self.worker_engine = ScalableInferenceEngine(**self._worker_engine_config)
 
         # Start vLLM server if using 2-GPU mode
         if self._use_2gpu_mode:
@@ -670,6 +677,28 @@ H3 REINFORCE++ Training
         })
 
         print("✓ Wandb initialized (offline mode)\n")
+
+    async def _stop_worker_engine(self):
+        """Shutdown worker engine to free GPU memory (for 1-GPU mode)."""
+        if not self._use_2gpu_mode and self.worker_engine is not None:
+            print("[1-GPU] Shutting down worker engine to free GPU memory for training...", flush=True)
+            await self.worker_engine.shutdown()
+            self.worker_engine = None
+
+            # Additional cleanup
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            print("[1-GPU] Worker engine stopped, GPU memory freed", flush=True)
+
+    async def _start_worker_engine(self):
+        """Restart worker engine (for 1-GPU mode after training)."""
+        if not self._use_2gpu_mode and self.worker_engine is None:
+            print("[1-GPU] Restarting worker engine...", flush=True)
+            from llm_economist.inference.async_engine import ScalableInferenceEngine
+            self.worker_engine = ScalableInferenceEngine(**self._worker_engine_config)
+            print("[1-GPU] Worker engine restarted", flush=True)
 
     async def _compute_baseline(self) -> Dict[str, float]:
         """
@@ -1000,7 +1029,10 @@ Hours to work this week (0-100)? Number only:"""
 
             rewards = np.array([r[1] for r in rollouts])
 
-            # TRAIN ON ROLLOUTS (THIS WAS MISSING!)
+            # ⚡ 1-GPU MODE: Free worker engine memory before training
+            await self._stop_worker_engine()
+
+            # TRAIN ON ROLLOUTS
             train_metrics = self.train_step(rollouts, iteration)
 
             iter_time = time.time() - iter_start
@@ -1065,6 +1097,10 @@ Hours to work this week (0-100)? Number only:"""
             # Periodic save
             if (iteration + 1) % self.config.save_every == 0:
                 self.save_checkpoint(f"iter_{iteration+1}")
+
+            # ⚡ 1-GPU MODE: Restart worker engine for next iteration (if not last)
+            if iteration < self.config.num_iterations - 1:
+                await self._start_worker_engine()
 
         # Final save
         self.save_checkpoint("final")
