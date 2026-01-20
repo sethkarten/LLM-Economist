@@ -112,7 +112,6 @@ class RLConfig:
     # GPU optimization
     gpu_memory_utilization: float = 0.85  # ⚡ OPTIMIZED: 0.45→0.85 for A6000
     enable_prefix_caching: bool = True  # ⚡ OPTIMIZED: Cache repeated prompts
-    use_4bit_planner: bool = True  # ⚡ Load planner in 4-bit (5GB vs 16GB)
 
     # Checkpointing
     save_every: int = 10
@@ -128,14 +127,14 @@ class RLConfig:
             return cls(
                 parallel_rollouts=12,  # B200 has 192GB, can handle 12 parallel
                 rollouts_per_iter=32,  # Larger batches for better gradients
-                gpu_memory_utilization=0.75,  # Leave room for planner (~6GB) + worker engine
+                gpu_memory_utilization=0.70,  # Leave room for planner (~16GB BF16) + worker engine
                 **kwargs
             )
         else:  # A6000 or default
             return cls(
                 parallel_rollouts=4,  # A6000 has 48GB
                 rollouts_per_iter=16,
-                gpu_memory_utilization=0.75,  # Leave room for planner (~6GB) + worker engine
+                gpu_memory_utilization=0.65,  # Leave room for planner (~16GB BF16) + worker engine
                 **kwargs
             )
 
@@ -217,20 +216,12 @@ class PlannerPolicy:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load base model in 4-bit (saves massive memory, LoRA adapters stay in full precision)
-        # This is critical: 8B model in BF16 takes 16GB, in 4-bit takes only ~5GB
-        from transformers import BitsAndBytesConfig
-
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
-
+        # Load base model in BF16 (full precision for speed)
+        # A6000 (48GB) and B200 (140GB) have plenty of memory - no need for quantization!
+        # 8B model in BF16: ~16GB, leaves plenty for vLLM workers
         self.model = AutoModelForCausalLM.from_pretrained(
             model_cache_path,
-            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
             local_files_only=True,
