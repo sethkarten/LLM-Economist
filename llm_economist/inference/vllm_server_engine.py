@@ -188,7 +188,7 @@ class VLLMServerEngine:
 
     async def generate_batch(self, batch: BatchRequest) -> BatchResponse:
         """
-        Generate responses for a batch of prompts.
+        Generate responses for a batch of prompts using concurrent requests.
 
         Args:
             batch: BatchRequest with prompts, system_prompts, temperatures, and parameters
@@ -199,76 +199,54 @@ class VLLMServerEngine:
         if not self._initialized:
             await self.start()
 
-        responses = []
-        latencies = []
-        is_json_valid = []
+        responses = [""] * len(batch.prompts)
+        latencies = [0.0] * len(batch.prompts)
+        is_json_valid = [False] * len(batch.prompts)
 
-        # SEQUENTIAL processing - vLLM server can't handle concurrent requests reliably
-        # This is slower but much more stable
-        consecutive_failures = 0
-        max_consecutive_failures = 5  # Restart server after 5 consecutive failures
+        # Use concurrent requests with semaphore to limit parallelism
+        # This is much faster than sequential while avoiding overwhelming the server
+        max_concurrent = 32  # Limit concurrent requests
+        semaphore = asyncio.Semaphore(max_concurrent)
 
-        async with aiohttp.ClientSession() as session:
-            results = []
-            for i, prompt in enumerate(batch.prompts):
-                # Combine system prompt with user prompt for completions API
-                system_prompt = batch.system_prompts[i] if i < len(batch.system_prompts) else ""
+        async def process_single(session: aiohttp.ClientSession, idx: int) -> None:
+            """Process a single request with semaphore limiting."""
+            async with semaphore:
+                system_prompt = batch.system_prompts[idx] if idx < len(batch.system_prompts) else ""
+                prompt = batch.prompts[idx]
                 full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-
-                # Get per-prompt temperature
-                temperature = batch.temperatures[i] if i < len(batch.temperatures) else 0.7
+                temperature = batch.temperatures[idx] if idx < len(batch.temperatures) else 0.7
 
                 try:
-                    result = await self._generate_single(
+                    text, latency = await self._generate_single(
                         session, full_prompt, batch.max_tokens,
                         temperature, 0.9  # top_p
                     )
-                    results.append(result)
-                    consecutive_failures = 0  # Reset on success
-                except aiohttp.ClientConnectorError as e:
-                    consecutive_failures += 1
-                    results.append(e)
-
-                    # Server might have crashed - try to restart
-                    if consecutive_failures >= max_consecutive_failures:
-                        print(f"[VLLMServer] {consecutive_failures} consecutive failures, restarting server...", flush=True)
-                        self.stop()
-                        await asyncio.sleep(2)
-                        try:
-                            await self.start(timeout=120)
-                            consecutive_failures = 0
-                            print("[VLLMServer] Server restarted successfully", flush=True)
-                        except Exception as restart_err:
-                            print(f"[VLLMServer] Failed to restart server: {restart_err}", flush=True)
-                            break  # Give up if restart fails
-                except Exception as e:
-                    results.append(e)
-
-                # Progress indicator every 20 requests
-                if (i + 1) % 20 == 0:
-                    print(f"[VLLMServer] Processed {i+1}/{len(batch.prompts)} requests", flush=True)
-
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    print(f"Request {i} failed: {type(result).__name__}: {result}", flush=True)
-                    logger.error(f"Request {i} failed: {type(result).__name__}: {result}")
-                    responses.append("")
-                    latencies.append(0.0)
-                    is_json_valid.append(False)
-                else:
-                    text, latency = result
-                    responses.append(text)
-                    latencies.append(latency)
-                    # Check if JSON format was requested and response is valid
+                    responses[idx] = text
+                    latencies[idx] = latency
+                    # Check JSON validity
                     if batch.json_format:
                         try:
                             import json
                             json.loads(text)
-                            is_json_valid.append(True)
+                            is_json_valid[idx] = True
                         except:
-                            is_json_valid.append(False)
+                            is_json_valid[idx] = False
                     else:
-                        is_json_valid.append(True)
+                        is_json_valid[idx] = True
+                except Exception as e:
+                    logger.warning(f"Request {idx} failed: {type(e).__name__}: {e}")
+                    # Keep defaults (empty string, 0 latency, False validity)
+
+        # Process all requests concurrently with semaphore limiting
+        start_time = time.time()
+        connector = aiohttp.TCPConnector(limit=max_concurrent * 2)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            tasks = [process_single(session, i) for i in range(len(batch.prompts))]
+            await asyncio.gather(*tasks)
+
+        elapsed = time.time() - start_time
+        success_count = sum(1 for r in responses if r)
+        print(f"[VLLMServer] Batch: {success_count}/{len(batch.prompts)} in {elapsed:.1f}s ({len(batch.prompts)/elapsed:.1f} req/s)", flush=True)
 
         return BatchResponse(
             request_ids=batch.request_ids,
