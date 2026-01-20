@@ -125,9 +125,9 @@ class RLConfig:
         """Create config optimized for specific GPU type."""
         if gpu_type.lower() == "b200":
             return cls(
-                parallel_rollouts=12,  # B200 has 192GB, can handle 12 parallel
-                rollouts_per_iter=32,  # Larger batches for better gradients
-                gpu_memory_utilization=0.70,  # Leave room for planner (~16GB BF16) + worker engine
+                parallel_rollouts=8,  # Reduced from 12 to decrease memory contention
+                rollouts_per_iter=16,  # Reduced from 32 to fix training phase bottleneck
+                gpu_memory_utilization=0.75,  # Increased since we're using less parallelism
                 **kwargs
             )
         else:  # A6000 or default
