@@ -393,34 +393,45 @@ class PlannerPolicy:
             attention_mask.append(torch.ones_like(ids))
             attention_mask[-1][:pad_len] = 0  # Mask padding tokens
 
-        # Stack into batch
-        input_ids_batch = torch.stack(padded_input_ids).to(self.device)
-        attention_mask_batch = torch.stack(attention_mask).to(self.device)
+        # Process in chunks to avoid OOM (chunk_size=4)
+        chunk_size = 4
+        all_log_probs = []
 
-        # Single forward pass for entire batch
-        with torch.enable_grad():
-            outputs = self.model(input_ids_batch, attention_mask=attention_mask_batch)
-            logits = outputs.logits
+        for chunk_start in range(0, len(padded_input_ids), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(padded_input_ids))
+            chunk_input_ids = padded_input_ids[chunk_start:chunk_end]
+            chunk_attention_mask = [attention_mask[i] for i in range(chunk_start, chunk_end)]
 
-        # Compute log probs for each sample in batch
-        log_probs_list = []
-        for i, response_len in enumerate(batch_response_lengths):
-            # Find where response starts (accounting for padding)
-            pad_len = max_len - batch_input_ids[i].shape[0]
-            prompt_len = batch_input_ids[i].shape[0] - response_len
-            response_start = pad_len + prompt_len
+            # Stack chunk into batch
+            input_ids_batch = torch.stack(chunk_input_ids).to(self.device)
+            attention_mask_batch = torch.stack(chunk_attention_mask).to(self.device)
 
-            # Extract response logits and token IDs
-            response_logits = logits[i, response_start-1:response_start+response_len-1, :]
-            response_token_ids = input_ids_batch[i, response_start:response_start+response_len]
+            # Forward pass for chunk
+            with torch.enable_grad():
+                outputs = self.model(input_ids_batch, attention_mask=attention_mask_batch)
+                logits = outputs.logits
 
-            # Compute log probs
-            log_probs = F.log_softmax(response_logits, dim=-1)
-            selected_log_probs = log_probs[range(len(response_token_ids)), response_token_ids]
+            # Compute log probs for each sample in chunk
+            for i in range(len(chunk_input_ids)):
+                global_i = chunk_start + i
+                response_len = batch_response_lengths[global_i]
 
-            log_probs_list.append(selected_log_probs.sum())
+                # Find where response starts (accounting for padding)
+                pad_len = max_len - batch_input_ids[global_i].shape[0]
+                prompt_len = batch_input_ids[global_i].shape[0] - response_len
+                response_start = pad_len + prompt_len
 
-        return torch.stack(log_probs_list)
+                # Extract response logits and token IDs
+                response_logits = logits[i, response_start-1:response_start+response_len-1, :]
+                response_token_ids = input_ids_batch[i, response_start:response_start+response_len]
+
+                # Compute log probs
+                log_probs = F.log_softmax(response_logits, dim=-1)
+                selected_log_probs = log_probs[range(len(response_token_ids)), response_token_ids]
+
+                all_log_probs.append(selected_log_probs.sum())
+
+        return torch.stack(all_log_probs)
 
     def _compute_log_prob(self, scores: Tuple[torch.Tensor, ...], generated_ids: torch.Tensor) -> float:
         """Compute log probability of generated sequence."""
