@@ -657,7 +657,7 @@ Hours to work this week (0-100)? Number only:"""
                 prompts.append(prompt)
 
             batch = BatchRequest(
-                request_ids=[f"baseline_w_{i}" for i in range(len(prompts))],
+                request_ids=[f"baseline_step{step}_w_{i}" for i in range(len(prompts))],
                 prompts=prompts,
                 system_prompts=["You are a worker deciding hours to work."] * len(prompts),
                 temperatures=[0.7] * len(prompts),
@@ -761,7 +761,7 @@ Hours to work this week (0-100)? Number only:"""
                 prompts.append(prompt)
 
             batch = BatchRequest(
-                request_ids=[f"w_{i}" for i in range(len(prompts))],
+                request_ids=[f"r{rollout_id}_s{step}_w_{i}" for i in range(len(prompts))],
                 prompts=prompts,
                 system_prompts=["You are a worker deciding hours to work."] * len(prompts),
                 temperatures=[0.7] * len(prompts),
