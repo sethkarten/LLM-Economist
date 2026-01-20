@@ -86,9 +86,9 @@ class VLLMServerEngine:
         env["TORCHDYNAMO_DISABLE"] = "1"
         env["VLLM_USE_V1"] = "0"
 
-        print(f"[VLLMServer] Starting vLLM server on physical GPU {self.gpu_id}, port {self.port}")
-        print(f"[VLLMServer] Model: {self.model_name}")
-        print(f"[VLLMServer] Command: {' '.join(cmd)}")
+        print(f"[VLLMServer] Starting vLLM server on physical GPU {self.gpu_id}, port {self.port}", flush=True)
+        print(f"[VLLMServer] Model: {self.model_name}", flush=True)
+        print(f"[VLLMServer] Command: {' '.join(cmd)}", flush=True)
         logger.info(f"Starting vLLM server on GPU {self.gpu_id}, port {self.port}")
 
         # Start the server process
@@ -106,7 +106,7 @@ class VLLMServerEngine:
             check_count += 1
             if check_count % 10 == 0:
                 elapsed = time.time() - start_time
-                print(f"[VLLMServer] Waiting for server... ({elapsed:.0f}s elapsed)")
+                print(f"[VLLMServer] Waiting for server... ({elapsed:.0f}s elapsed)", flush=True)
 
             try:
                 async with aiohttp.ClientSession() as session:
@@ -205,7 +205,7 @@ class VLLMServerEngine:
 
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    print(f"Request {i} failed: {type(result).__name__}: {result}")
+                    print(f"Request {i} failed: {type(result).__name__}: {result}", flush=True)
                     logger.error(f"Request {i} failed: {type(result).__name__}: {result}")
                     responses.append("")
                     latencies.append(0.0)
