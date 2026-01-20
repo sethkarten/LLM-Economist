@@ -139,6 +139,18 @@ class RLConfig:
                 gpu_memory_utilization=0.75,  # Increased since we're using less parallelism
                 **kwargs
             )
+        elif gpu_type.lower() == "b200_2gpu":
+            # 2-GPU mode on B200: planner on GPU 0, vLLM on GPU 1
+            # B200 is ~3x faster than A6000 - can handle more parallelism
+            defaults_2gpu = {
+                "parallel_rollouts": 16,  # B200 can handle more parallelism
+                "rollouts_per_iter": 32,  # Same as A6000 2-GPU
+                "gpu_memory_utilization": 0.90,  # B200 has 141GB - plenty of headroom
+                "num_agents": 1000,  # Full experiment default
+                "num_iterations": 100,  # Full experiment default
+            }
+            merged = {**defaults_2gpu, **kwargs}
+            return cls(**merged)
         elif gpu_type.lower() == "a6000_2gpu":
             # 2-GPU mode: planner on GPU 0, vLLM on GPU 1
             # Each GPU can use more memory since they're dedicated
@@ -694,8 +706,13 @@ class REINFORCEExperiment:
         print(f"Optimizer: AdamW (lr={self.config.learning_rate})")
         print(f"Scheduler: CosineAnnealing\n")
 
-    def setup_wandb(self):
+    def setup_wandb(self, offline: bool = False):
         """Initialize wandb logging."""
+        # Set offline mode if requested (for SLURM clusters)
+        if offline:
+            os.environ['WANDB_MODE'] = 'offline'
+            print("[WANDB] Running in offline mode")
+
         wandb.init(
             project='llm-economist',
             name=f'h3_reinforce_{self.config.planner_model.split("/")[-1]}_seed{self.config.seed}',
@@ -717,7 +734,8 @@ H3 REINFORCE++ Training
             'baseline_labor': self.baseline_metrics['mean_labor'],
         })
 
-        print("✓ Wandb initialized (offline mode)\n")
+        mode_str = "offline" if offline else "online"
+        print(f"✓ Wandb initialized ({mode_str} mode)\n")
 
     async def _stop_worker_engine(self):
         """
@@ -1240,8 +1258,8 @@ async def main():
         description="REINFORCE++ H3 Experiment: OPTIMIZED for Maximum GPU Utilization",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--gpu", type=str, default="a6000", choices=["a6000", "a6000_2gpu", "b200"],
-                       help="GPU type: a6000 (1-GPU), a6000_2gpu (2-GPU, 2x faster), b200")
+    parser.add_argument("--gpu", type=str, default="a6000", choices=["a6000", "a6000_2gpu", "b200", "b200_2gpu"],
+                       help="GPU type: a6000 (1-GPU), a6000_2gpu (2-GPU), b200 (1-GPU), b200_2gpu (2-GPU, fastest)")
     parser.add_argument("--num-iterations", type=int, default=None,
                        help="Number of training iterations (auto-set based on GPU if not specified)")
     parser.add_argument("--rollouts-per-iter", type=int, default=None,
@@ -1258,6 +1276,8 @@ async def main():
                        help="Output directory")
     parser.add_argument("--resume", type=str, default=None,
                        help="Resume from checkpoint")
+    parser.add_argument("--wandb-offline", action="store_true",
+                       help="Run wandb in offline mode (for SLURM clusters)")
 
     args = parser.parse_args()
 
@@ -1315,7 +1335,7 @@ async def main():
             experiment.load_model_weights()
 
         # Initialize wandb logging
-        experiment.setup_wandb()
+        experiment.setup_wandb(offline=args.wandb_offline)
 
         await experiment.train()
     finally:
