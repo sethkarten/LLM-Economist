@@ -467,28 +467,67 @@ class ScalableInferenceEngine:
     async def shutdown(self):
         """Shutdown the engine and free GPU memory."""
         import gc
+        import os
+        import signal
+        import subprocess
         import torch
 
         if self._engine is not None:
             logger.info("Shutting down vLLM engine and freeing GPU memory...")
             print("[ScalableInferenceEngine] Shutting down and freeing GPU memory...", flush=True)
 
+            # Try to use vLLM's shutdown method if available
+            try:
+                if hasattr(self._engine, 'shutdown'):
+                    await self._engine.shutdown()
+                elif hasattr(self._engine, '_engine_core'):
+                    # V1 engine: try to shutdown the core
+                    if hasattr(self._engine._engine_core, 'shutdown'):
+                        self._engine._engine_core.shutdown()
+            except Exception as e:
+                print(f"[ScalableInferenceEngine] Engine shutdown method failed: {e}", flush=True)
+
             # Delete the engine reference
             del self._engine
             self._engine = None
             self._initialized = False
 
-            # Force garbage collection
-            gc.collect()
+            # Force garbage collection (multiple rounds)
+            for _ in range(3):
+                gc.collect()
 
             # Clear CUDA cache
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
 
-            # Give time for subprocesses to clean up
+            # Kill any orphaned vLLM EngineCore processes
+            try:
+                # Find vLLM EngineCore processes belonging to current user
+                result = subprocess.run(
+                    ['pgrep', '-f', 'EngineCore'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.stdout.strip():
+                    pids = result.stdout.strip().split('\n')
+                    for pid in pids:
+                        try:
+                            os.kill(int(pid), signal.SIGKILL)
+                            print(f"[ScalableInferenceEngine] Killed orphaned EngineCore process {pid}", flush=True)
+                        except (ProcessLookupError, ValueError):
+                            pass
+            except Exception as e:
+                print(f"[ScalableInferenceEngine] EngineCore cleanup note: {e}", flush=True)
+
+            # Wait for processes to terminate and memory to be released
             import asyncio
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
+
+            # Final garbage collection and cache clear
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
 
             print("[ScalableInferenceEngine] Shutdown complete", flush=True)
 
