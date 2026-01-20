@@ -1,0 +1,60 @@
+{
+  "config": {
+    "experiment": "h2",
+    "planner_model": "gemma3-4b",
+    "worker_model": "gemma3-4b",
+    "num_agents": 100,
+    "max_timesteps": 64,
+    "tax_year_length": 64,
+    "num_iterations": 50,
+    "rollouts_per_iter": 32,
+    "learning_rate": 1e-05,
+    "kl_coef": 0.05,
+    "entropy_coef": 0.01,
+    "max_grad_norm": 1.0,
+    "swf_weight": 1.0,
+    "gini_weight": 0.1,
+    "labor_weight": 0.05,
+    "use_lora": true,
+    "lora_r": 32,
+    "lora_alpha": 64,
+    "save_every": 10,
+    "seed": 42
+  },
+  "iteration": 3,
+  "best_reward": 1.2234274174731927,
+  "metrics_history": [
+    {
+      "iteration": 0,
+      "reward_mean": 1.2076723776834286,
+      "reward_std": 0.0980612516674708,
+      "reward_max": 1.454277304458786,
+      "reward_min": 0.9962769534970057,
+      "time": 534.0605533123016
+    },
+    {
+      "iteration": 1,
+      "reward_mean": 1.192431365664006,
+      "reward_std": 0.11268238051258199,
+      "reward_max": 1.4474367559763097,
+      "reward_min": 0.9371296427762861,
+      "time": 510.3057129383087
+    },
+    {
+      "iteration": 2,
+      "reward_mean": 1.1659305736174543,
+      "reward_std": 0.08769352511693586,
+      "reward_max": 1.3334762191850973,
+      "reward_min": 0.9680065204882862,
+      "time": 507.188364982605
+    },
+    {
+      "iteration": 3,
+      "reward_mean": 1.2234274174731927,
+      "reward_std": 0.08003915912924131,
+      "reward_max": 1.3766580307855834,
+      "reward_min": 1.0846625482502374,
+      "time": 503.55893754959106
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+% Auto-generated LaTeX tables
+
+
+\begin{table}[t]
+\centering
+\caption{\textbf{G1: RL Baseline with Rational Agents.} PPO-trained neural network policies for both planner and workers. SWF scales linearly with agent count.}
+\label{tab:g1_results}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Configuration & Best SWF & Training Time \\
+\midrule
+1,000 agents (seed=42) & 1964.1 & 11 min \\
+1,000 agents (seed=123) & 1884.6 & 10 min \\
+1,000 agents (seed=456) & 1845.2 & 10 min \\
+\textbf{Mean ± Std} & \textbf{1898.0 ± 60.3} & -- \\
+\midrule
+5,000 agents & 9744.2 & 4 min \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+\begin{table}[t]
+\centering
+\caption{\textbf{G2: Distribution Shift Analysis.} RL planner (trained on rational agents) evaluated with LLM workers. Consistent $\sim$10× SWF drop across all models demonstrates distribution shift.}
+\label{tab:g2_results}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Worker Model & Mean SWF & Mean Gini \\
+\midrule
+Gemma-3 4B & 195.5 & 0.265 \\
+Mistral 7B V0.-3 & 194.4 & 0.279 \\
+Llama -3.1 8B & 194.9 & 0.340 \\
+Qwen-3 8B & 194.3 & 0.261 \\
+\midrule
+\textbf{G1 Reference} & \textbf{1898.0} & -- \\
+\bottomrule
+\end{tabular}
+\end{table}

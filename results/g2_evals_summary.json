@@ -1,0 +1,65 @@
+{
+  "completed": "2026-01-14T12:48:55.794900",
+  "results": [
+    {
+      "name": "g2_gemma4b_best",
+      "desc": "G2 with Gemma-3-4B workers (checkpoint: best)",
+      "worker_model": "gemma3-4b",
+      "checkpoint": "best",
+      "log_file": "/tmp/gpu1_g2_gemma4b_best.log",
+      "output_file": "results/g2_evals/g2_gemma4b_best.json",
+      "elapsed_seconds": 720.0114145278931,
+      "return_code": 0,
+      "mean_swf": 195.49426577486784,
+      "mean_gini": 0.2645916021945452
+    },
+    {
+      "name": "g2_mistral7b_best",
+      "desc": "G2 with Mistral-7B workers (checkpoint: best)",
+      "worker_model": "mistral-7b-v0.3",
+      "checkpoint": "best",
+      "log_file": "/tmp/gpu1_g2_mistral7b_best.log",
+      "output_file": "results/g2_evals/g2_mistral7b_best.json",
+      "elapsed_seconds": 1170.016783952713,
+      "return_code": 0,
+      "mean_swf": 194.41381415844276,
+      "mean_gini": 0.2789298034173524
+    },
+    {
+      "name": "g2_llama8b_best",
+      "desc": "G2 with Llama-3.1-8B workers (checkpoint: best)",
+      "worker_model": "llama-3.1-8b",
+      "checkpoint": "best",
+      "log_file": "/tmp/gpu1_g2_llama8b_best.log",
+      "output_file": "results/g2_evals/g2_llama8b_best.json",
+      "elapsed_seconds": 1470.0224206447601,
+      "return_code": 0,
+      "mean_swf": 194.880367603755,
+      "mean_gini": 0.3401662044042759
+    },
+    {
+      "name": "g2_qwen8b_best",
+      "desc": "G2 with Qwen3-8B workers (checkpoint: best)",
+      "worker_model": "qwen3-8b",
+      "checkpoint": "best",
+      "log_file": "/tmp/gpu1_g2_qwen8b_best.log",
+      "output_file": "results/g2_evals/g2_qwen8b_best.json",
+      "elapsed_seconds": 1170.0176589488983,
+      "return_code": 0,
+      "mean_swf": 194.29713498173555,
+      "mean_gini": 0.2607717266497755
+    },
+    {
+      "name": "g2_olmo7b_best",
+      "desc": "G2 with OLMo-3-7B workers (checkpoint: best)",
+      "worker_model": "olmo3-7b",
+      "checkpoint": "best",
+      "log_file": "/tmp/gpu1_g2_olmo7b_best.log",
+      "output_file": "results/g2_evals/g2_olmo7b_best.json",
+      "elapsed_seconds": 840.0126593112946,
+      "return_code": 0,
+      "mean_swf": -1137.9862693732618,
+      "mean_gini": 0.3263306627567049
+    }
+  ]
+}

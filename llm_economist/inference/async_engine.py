@@ -90,6 +90,7 @@ class ScalableInferenceEngine:
         enforce_eager: Optional[bool] = None,  # Auto-detect for Blackwell
         text_only_mode: bool = False,  # For multimodal models, disable vision encoder
         dtype: Optional[str] = None,  # Override dtype (e.g., "bfloat16")
+        device_id: Optional[int] = None,  # Specific CUDA device ID (cuda:N)
     ):
         """
         Initialize the scalable inference engine.
@@ -114,6 +115,7 @@ class ScalableInferenceEngine:
         self.quantization = quantization
         self.max_model_len = max_model_len
         self.max_num_seqs = max_num_seqs
+        self.device_id = device_id
 
         self._engine = None
         self._initialized = False
@@ -178,6 +180,12 @@ class ScalableInferenceEngine:
         try:
             from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
             self._SamplingParams = SamplingParams
+
+            # Set CUDA device if specified (for multi-GPU setups)
+            if self.device_id is not None:
+                import torch
+                torch.cuda.set_device(self.device_id)
+                logger.info(f"Set CUDA device to cuda:{self.device_id} for vLLM engine")
 
             logger.info(f"Initializing vLLM engine with config: {self._config}")
 
