@@ -1,0 +1,108 @@
+{
+  "config": {
+    "experiment": "h1",
+    "planner_model": "gemma3-4b",
+    "worker_model": "gemma3-4b",
+    "num_agents": 100,
+    "max_timesteps": 64,
+    "tax_year_length": 64,
+    "num_iterations": 50,
+    "rollouts_per_iter": 32,
+    "learning_rate": 1e-05,
+    "kl_coef": 0.05,
+    "entropy_coef": 0.01,
+    "max_grad_norm": 1.0,
+    "swf_weight": 1.0,
+    "gini_weight": 0.1,
+    "labor_weight": 0.05,
+    "use_lora": true,
+    "lora_r": 32,
+    "lora_alpha": 64,
+    "save_every": 10,
+    "seed": 42
+  },
+  "iteration": 9,
+  "best_reward": 0.7408536278228728,
+  "metrics_history": [
+    {
+      "iteration": 0,
+      "reward_mean": 0.7408536278228728,
+      "reward_std": 2.715508247286782,
+      "reward_max": 1.4380815763886337,
+      "reward_min": -14.370786888547304,
+      "time": 608.6451563835144
+    },
+    {
+      "iteration": 1,
+      "reward_mean": 0.7393292966966452,
+      "reward_std": 2.700535069387773,
+      "reward_max": 1.4751805203526107,
+      "reward_min": -14.28690093045461,
+      "time": 580.6196091175079
+    },
+    {
+      "iteration": 2,
+      "reward_mean": 0.7003995507390335,
+      "reward_std": 2.6157188607677284,
+      "reward_max": 1.3839134044444235,
+      "reward_min": -13.856608677462123,
+      "time": 576.1678991317749
+    },
+    {
+      "iteration": 3,
+      "reward_mean": -0.2268746508324222,
+      "reward_std": 4.461460340495238,
+      "reward_max": 1.3584338222070422,
+      "reward_min": -14.271204594796075,
+      "time": 570.5895919799805
+    },
+    {
+      "iteration": 4,
+      "reward_mean": 0.24818134537229142,
+      "reward_std": 3.718880048475423,
+      "reward_max": 1.407553442272849,
+      "reward_min": -14.260639492446717,
+      "time": 572.9711375236511
+    },
+    {
+      "iteration": 5,
+      "reward_mean": 0.24049169947474736,
+      "reward_std": 3.7370078064031724,
+      "reward_max": 1.3587650904022661,
+      "reward_min": -14.245265973662706,
+      "time": 574.7352249622345
+    },
+    {
+      "iteration": 6,
+      "reward_mean": -0.2219460950434547,
+      "reward_std": 4.461211209791808,
+      "reward_max": 1.4317584268744015,
+      "reward_min": -14.184613081559057,
+      "time": 572.8501734733582
+    },
+    {
+      "iteration": 7,
+      "reward_mean": 0.7180084113983862,
+      "reward_std": 2.6552285671524967,
+      "reward_max": 1.4294071511412731,
+      "reward_min": -14.056821030973834,
+      "time": 571.808454990387
+    },
+    {
+      "iteration": 8,
+      "reward_mean": 0.7349357429143925,
+      "reward_std": 2.6229064465592646,
+      "reward_max": 1.3508312378129714,
+      "reward_min": -13.861237125002422,
+      "time": 575.070953130722
+    },
+    {
+      "iteration": 9,
+      "reward_mean": -0.7154667525993872,
+      "reward_std": 5.085822770952811,
+      "reward_max": 1.412901298972041,
+      "reward_min": -14.348671282275715,
+      "time": 594.5457363128662
+    }
+  ]
+}

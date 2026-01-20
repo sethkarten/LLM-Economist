@@ -19,6 +19,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import numpy as np
 import random
+import wandb
 
 # Local imports
 from .inference import ScalableInferenceEngine, InferenceConfig, BatchRequest
@@ -313,6 +314,22 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
                        f"mean_income=${metrics['mean_income']:.0f}, "
                        f"time={step_time:.2f}s")
 
+        # Log to wandb
+        if self.use_wandb:
+            wandb.log({
+                'swf': metrics['swf'],
+                'gini': metrics['gini'],
+                'income/mean': metrics['mean_income'],
+                'income/median': metrics['median_income'],
+                'income/std': metrics['std_income'],
+                'utility/mean': metrics['mean_utility'],
+                'labor/mean': metrics['mean_labor'],
+                'tax/total_collected': metrics['total_tax'],
+                'tax/rebate_per_agent': metrics['rebate'],
+                'tax/rates': metrics['tax_rates'],
+                'time/step_seconds': step_time,
+            }, step=timestep)
+
         # Advance timestep
         self.state.timestep += 1
 
@@ -466,6 +483,30 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         """Run the full simulation."""
         logger.info(f"Starting simulation: {self.num_agents} agents, {self.max_timesteps} steps")
 
+        # Initialize wandb if requested
+        if self.use_wandb:
+            wandb.init(
+                project='llm-economist',
+                name=f'icrl_{self.model_name}_{self.scenario}_{self.num_agents}agents_seed{self.seed}',
+                config={
+                    'num_agents': self.num_agents,
+                    'max_timesteps': self.max_timesteps,
+                    'model_name': self.model_name,
+                    'scenario': self.scenario,
+                    'tax_year_length': self.tax_year_length,
+                    'batch_size': self.batch_size,
+                    'seed': self.seed,
+                },
+                tags=['icrl', 'in-context', self.scenario, f'agents_{self.num_agents}', f'seed_{self.seed}'],
+                notes=f"""
+ICRL (In-Context RL) Simulation
+- Model: {self.model_name}
+- Scenario: {self.scenario}
+- Zero-shot LLM planner and workers
+""",
+            )
+            logger.info("✓ Wandb initialized")
+
         start_time = time.time()
 
         for _ in range(self.max_timesteps):
@@ -474,6 +515,10 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         total_time = time.time() - start_time
         logger.info(f"Simulation complete in {total_time:.1f}s ({total_time/60:.1f} min)")
         logger.info(f"Final SWF: {self.state.swf:.4f}")
+
+        # Finish wandb
+        if self.use_wandb:
+            wandb.finish()
 
         return self.metrics_history
 
@@ -520,6 +565,7 @@ async def main_async(args):
         quantization=args.quantization,
         batch_size=args.batch_size,
         seed=args.seed,
+        use_wandb=args.wandb,
         debug=args.debug,
     )
 
@@ -569,6 +615,8 @@ def create_argument_parser():
                        help='Output file path')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug logging')
+    parser.add_argument('--wandb', action='store_true',
+                       help='Enable wandb logging')
 
     # Utility
     parser.add_argument('--estimate-time', action='store_true',

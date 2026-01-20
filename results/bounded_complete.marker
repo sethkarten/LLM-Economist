@@ -1,0 +1,21 @@
+{
+  "completed_at": "2026-01-14T14:37:14.000201",
+  "experiments": [
+    "gemma3-4b_seed42",
+    "gemma3-4b_seed123",
+    "gemma3-4b_seed456",
+    "mistral-7b-v0.3_seed42",
+    "mistral-7b-v0.3_seed123",
+    "mistral-7b-v0.3_seed456",
+    "llama-3.1-8b_seed42",
+    "llama-3.1-8b_seed123",
+    "llama-3.1-8b_seed456",
+    "olmo3-7b_seed42",
+    "olmo3-7b_seed123",
+    "olmo3-7b_seed456",
+    "qwen3-8b_seed42",
+    "qwen3-8b_seed123",
+    "qwen3-8b_seed456"
+  ],
+  "analysis_success": true
+}

@@ -561,16 +561,31 @@ class REINFORCEExperiment:
 
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...")
 
+        # Use separate GPU for worker engine if available (cuda:1, physical GPU 3 when CUDA_VISIBLE_DEVICES=2,3)
+        import torch
+        worker_device_id = 1 if torch.cuda.device_count() > 1 else None
+
+        # If using separate GPU, can use higher memory utilization (no sharing with planner)
+        worker_gpu_mem = 0.85 if worker_device_id is not None else self.config.gpu_memory_utilization
+
+        if worker_device_id is not None:
+            print(f"✓ 2-GPU mode: worker on cuda:{worker_device_id}, planner on cuda:0")
+            print(f"  Worker GPU memory: 0.85 (dedicated GPU)")
+        else:
+            print(f"✓ 1-GPU mode: worker and planner sharing cuda:0")
+            print(f"  Worker GPU memory: {worker_gpu_mem} (shared with planner)")
+
         self.worker_engine = ScalableInferenceEngine(
             model_name=worker_model_path,
             quantization=quant_str,
             tensor_parallel_size=1,
-            gpu_memory_utilization=self.config.gpu_memory_utilization,  # ⚡ OPTIMIZED: Use config value
+            gpu_memory_utilization=worker_gpu_mem,  # ⚡ Higher utilization when dedicated GPU
             max_model_len=4096,
             text_only_mode=model_config.text_only_mode,
             enforce_eager=True,
             enable_prefix_caching=self.config.enable_prefix_caching,  # ⚡ OPTIMIZED: Enable if safe
             enable_chunked_prefill=False,  # Disable for FlashInfer stability
+            device_id=worker_device_id,  # ⚡ Use separate GPU if available
         )
 
         print("Worker engine loaded.\n")

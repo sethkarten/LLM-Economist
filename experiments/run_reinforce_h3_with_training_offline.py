@@ -26,6 +26,9 @@ os.environ['TRANSFORMERS_OFFLINE'] = '1'
 # Point to HuggingFace cache directory (models are pre-downloaded)
 os.environ['HF_HOME'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface'
 os.environ['TRANSFORMERS_CACHE'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface/hub'
+# Wandb offline mode for SLURM
+os.environ['WANDB_MODE'] = 'offline'
+os.environ['WANDB_DIR'] = '/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/wandb'
 
 import argparse
 import asyncio
@@ -39,6 +42,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import wandb
 
 # =============================================================================
 # PROMPT CONFIGURATIONS
@@ -76,7 +80,7 @@ class RLConfig:
     """Configuration for REINFORCE++ H3 training."""
     experiment: str = "h3"
     planner_model: str = "meta-llama/Llama-3.1-8B-Instruct"  # Trainable with LoRA
-    worker_model: str = "meta-llama/Llama-3.2-1B"  # Smaller for vLLM to fit on same GPU
+    worker_model: str = "qwen3-4b"  # FIX: Use better worker model (cached on della-gpu, vLLM compatible)
 
     # Environment
     num_agents: int = 100
@@ -85,13 +89,13 @@ class RLConfig:
     # Training
     num_iterations: int = 50
     rollouts_per_iter: int = 16
-    learning_rate: float = 1e-5
-    kl_coef: float = 0.05
+    learning_rate: float = 5e-5  # FIX: Increased from 1e-5 for faster learning
+    kl_coef: float = 0.01  # FIX: Reduced from 0.05 to allow more exploration
     entropy_coef: float = 0.01
     max_grad_norm: float = 1.0
 
-    # Reward: Direct comparison to baseline (no complex weighting)
-    # reward = final_swf - baseline_swf
+    # Reward: Direct comparison to baseline with scaling
+    # reward = (final_swf - baseline_swf) / expected_range
 
     # LoRA
     use_lora: bool = True
@@ -129,13 +133,21 @@ def format_h3_user_prompt(state: Dict[str, Any], baseline_metrics: Dict[str, flo
 
 def compute_reward(final_swf: float, baseline_swf: float) -> float:
     """
-    Compute reward for H3: Direct comparison to baseline.
+    Compute reward for H3: Scaled SWF improvement over baseline.
 
-    reward = final_swf - baseline_swf
+    FIX: Scale rewards to [0, 1] range for better learning signal.
+    Expected improvement: 40 SWF (baseline ~200, target ~240)
 
     Positive reward means planner beat the US federal tax baseline.
     """
-    return final_swf - baseline_swf
+    raw_improvement = final_swf - baseline_swf
+
+    # Scale by expected improvement range
+    # This gives rewards roughly in [0, 1] for typical improvements
+    expected_range = 40.0  # SWF improvement we're aiming for
+    scaled_reward = raw_improvement / expected_range
+
+    return scaled_reward
 
 
 class PlannerPolicy:
@@ -466,6 +478,31 @@ class REINFORCEExperiment:
         print(f"Optimizer: AdamW (lr={self.config.learning_rate})")
         print(f"Scheduler: CosineAnnealing\n")
 
+    def setup_wandb(self):
+        """Initialize wandb logging."""
+        wandb.init(
+            project='llm-economist',
+            name=f'h3_reinforce_{self.config.planner_model.split("/")[-1]}_seed{self.config.seed}',
+            config=asdict(self.config),
+            tags=['h3', 'reinforce++', f'seed_{self.config.seed}', f'agents_{self.config.num_agents}'],
+            notes=f"""
+H3 REINFORCE++ Training
+- Planner: {self.config.planner_model} (LoRA finetuned)
+- Workers: {self.config.worker_model} (frozen)
+- Baseline SWF: {self.baseline_metrics['swf']:.2f}
+- Goal: Beat US Federal Tax baseline
+""",
+        )
+
+        # Log baseline metrics
+        wandb.config.update({
+            'baseline_swf': self.baseline_metrics['swf'],
+            'baseline_gini': self.baseline_metrics['gini'],
+            'baseline_labor': self.baseline_metrics['mean_labor'],
+        })
+
+        print("✓ Wandb initialized (offline mode)\n")
+
     async def _compute_baseline(self) -> Dict[str, float]:
         """
         Compute baseline metrics using US federal progressive tax (2024).
@@ -699,9 +736,10 @@ Hours to work this week (0-100)? Number only:"""
         baseline = rewards.mean()
         advantages = rewards - baseline
 
-        # Normalize advantages
-        if advantages.std() > 1e-8:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # FIX: Normalize WITHOUT re-centering (was double-centering before)
+        # Advantages are already centered, just scale by std
+        if rewards.std() > 1e-8:
+            advantages = advantages / (rewards.std() + 1e-8)
 
         # Recompute log probs with gradients
         new_log_probs = []
@@ -806,6 +844,42 @@ Hours to work this week (0-100)? Number only:"""
             print(f"  LR: {metrics['lr']:.2e}")
             print(f"  Time: {iter_time:.1f}s")
 
+            # Log to wandb
+            actual_swf = self.baseline_metrics['swf'] + metrics['reward_mean']
+            swf_improvement_pct = (metrics['reward_mean'] / self.baseline_metrics['swf']) * 100
+
+            wandb.log({
+                # Social Welfare
+                'swf/actual': actual_swf,
+                'swf/baseline': self.baseline_metrics['swf'],
+                'swf/improvement_absolute': metrics['reward_mean'],
+                'swf/improvement_pct': swf_improvement_pct,
+                'swf/best': self.baseline_metrics['swf'] + self.best_reward,
+
+                # Rewards
+                'reward/mean': metrics['reward_mean'],
+                'reward/std': metrics['reward_std'],
+                'reward/max': metrics['reward_max'],
+                'reward/min': metrics['reward_min'],
+                'reward/best': self.best_reward,
+
+                # Training losses
+                'loss/total': metrics['loss/total'],
+                'loss/policy_gradient': metrics['loss/pg'],
+                'loss/kl_divergence': metrics['loss/kl'],
+                'loss/entropy': metrics['loss/entropy'],
+
+                # Advantages
+                'advantage/mean': metrics['advantage/mean'],
+                'advantage/std': metrics['advantage/std'],
+
+                # Optimizer
+                'optimizer/learning_rate': metrics['lr'],
+
+                # Performance
+                'time/iteration_seconds': iter_time,
+            }, step=iteration)
+
             # Track best
             if metrics["reward_mean"] > self.best_reward:
                 self.best_reward = metrics["reward_mean"]
@@ -818,6 +892,9 @@ Hours to work this week (0-100)? Number only:"""
         # Final save
         self.save_checkpoint("final")
         print(f"\nTraining complete! Best reward: {self.best_reward:.3f}")
+
+        # Finish wandb
+        wandb.finish()
 
     def save_checkpoint(self, name: str):
         """Save training checkpoint including LoRA weights."""
@@ -953,6 +1030,9 @@ async def main():
         # Load model weights after setup (if resuming)
         if args.resume:
             experiment.load_model_weights()
+
+        # Initialize wandb logging
+        experiment.setup_wandb()
 
         await experiment.train()
     finally:

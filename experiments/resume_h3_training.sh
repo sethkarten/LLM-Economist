@@ -26,6 +26,11 @@ echo "================================================================"
 source /scratch/gpfs/CHIJ/milkkarten/.bashrc
 conda activate llm
 
+# CRITICAL: Disable offline mode for HuggingFace Hub
+unset HF_HUB_OFFLINE
+export TRANSFORMERS_OFFLINE=0
+export HF_DATASETS_OFFLINE=0
+
 cd /scratch/gpfs/CHIJ/milkkarten/LLM-Economist
 
 # Resume from iteration 100 checkpoint

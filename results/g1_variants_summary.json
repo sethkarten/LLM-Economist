@@ -1,0 +1,85 @@
+{
+  "completed": "2026-01-14T04:59:32.892085",
+  "results": [
+    {
+      "name": "g1_lowlr",
+      "desc": "G1 with lr=1e-4",
+      "args": {
+        "--num-agents": "1000",
+        "--training-steps": "300000",
+        "--batch-size": "2048",
+        "--lr": "1e-4",
+        "--output": "models/rl_baseline_g1_lowlr",
+        "--seed": "42"
+      },
+      "log_file": "/tmp/gpu1_g1_lowlr.log",
+      "elapsed_seconds": 390.0027344226837,
+      "return_code": 0,
+      "best_swf": 1959.9
+    },
+    {
+      "name": "g1_verylowlr",
+      "desc": "G1 with lr=5e-5",
+      "args": {
+        "--num-agents": "1000",
+        "--training-steps": "300000",
+        "--batch-size": "2048",
+        "--lr": "5e-5",
+        "--output": "models/rl_baseline_g1_verylowlr",
+        "--seed": "42"
+      },
+      "log_file": "/tmp/gpu1_g1_verylowlr.log",
+      "elapsed_seconds": 390.00272488594055,
+      "return_code": 0,
+      "best_swf": 1959.9
+    },
+    {
+      "name": "g1_2k",
+      "desc": "G1 with 2000 agents",
+      "args": {
+        "--num-agents": "2000",
+        "--training-steps": "300000",
+        "--batch-size": "4096",
+        "--lr": "3e-4",
+        "--output": "models/rl_baseline_g1_2k",
+        "--seed": "42"
+      },
+      "log_file": "/tmp/gpu1_g1_2k.log",
+      "elapsed_seconds": 390.0027422904968,
+      "return_code": 0,
+      "best_swf": 3891.8
+    },
+    {
+      "name": "g1_longrun",
+      "desc": "G1 with 500k steps, batch 4096",
+      "args": {
+        "--num-agents": "1000",
+        "--training-steps": "500000",
+        "--batch-size": "4096",
+        "--lr": "3e-4",
+        "--output": "models/rl_baseline_g1_longrun",
+        "--seed": "42"
+      },
+      "log_file": "/tmp/gpu1_g1_longrun.log",
+      "elapsed_seconds": 630.0040726661682,
+      "return_code": 0,
+      "best_swf": 1945.9
+    },
+    {
+      "name": "g1_highlr_seed123",
+      "desc": "G1 high-LR seed=123",
+      "args": {
+        "--num-agents": "1000",
+        "--training-steps": "300000",
+        "--batch-size": "2048",
+        "--lr": "5e-4",
+        "--output": "models/rl_baseline_g1_highlr_seed123",
+        "--seed": "123"
+      },
+      "log_file": "/tmp/gpu1_g1_highlr_seed123.log",
+      "elapsed_seconds": 390.0028147697449,
+      "return_code": 0,
+      "best_swf": 1947.5
+    }
+  ]
+}

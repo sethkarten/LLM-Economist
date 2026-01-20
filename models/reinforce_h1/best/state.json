@@ -1,0 +1,36 @@
+{
+  "config": {
+    "experiment": "h1",
+    "planner_model": "gemma3-4b",
+    "worker_model": "gemma3-4b",
+    "num_agents": 100,
+    "max_timesteps": 64,
+    "tax_year_length": 64,
+    "num_iterations": 50,
+    "rollouts_per_iter": 32,
+    "learning_rate": 1e-05,
+    "kl_coef": 0.05,
+    "entropy_coef": 0.01,
+    "max_grad_norm": 1.0,
+    "swf_weight": 1.0,
+    "gini_weight": 0.1,
+    "labor_weight": 0.05,
+    "use_lora": true,
+    "lora_r": 32,
+    "lora_alpha": 64,
+    "save_every": 10,
+    "seed": 42
+  },
+  "iteration": 0,
+  "best_reward": 0.7408536278228728,
+  "metrics_history": [
+    {
+      "iteration": 0,
+      "reward_mean": 0.7408536278228728,
+      "reward_std": 2.715508247286782,
+      "reward_max": 1.4380815763886337,
+      "reward_min": -14.370786888547304,
+      "time": 608.6451563835144
+    }
+  ]
+}
