@@ -23,6 +23,9 @@ Usage:
 # Use vLLM legacy API to avoid V1 compilation issues
 import os
 os.environ['VLLM_USE_V1'] = '0'
+# CRITICAL: Disable PyTorch compilation to avoid 10+ min hang
+os.environ['TORCH_COMPILE_DISABLE'] = '1'
+os.environ['TORCHDYNAMO_DISABLE'] = '1'
 # CRITICAL: Force offline mode and use cached models only
 # SLURM compute nodes have NO internet access
 os.environ['HF_DATASETS_OFFLINE'] = '1'
