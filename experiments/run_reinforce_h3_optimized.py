@@ -561,33 +561,49 @@ class REINFORCEExperiment:
 
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...")
 
-        # Use separate GPU for worker engine if available (cuda:1, physical GPU 3 when CUDA_VISIBLE_DEVICES=2,3)
-        worker_device_id = 1 if torch.cuda.device_count() > 1 else None
+        # Check for 2-GPU mode: parse CUDA_VISIBLE_DEVICES to get physical GPU IDs
+        cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        visible_gpus = [int(g.strip()) for g in cuda_visible.split(",") if g.strip().isdigit()] if cuda_visible else []
+        use_server_engine = len(visible_gpus) >= 2
 
-        # If using separate GPU, can use higher memory utilization (no sharing with planner)
-        # NOTE: torch.cuda.set_device() doesn't work for vLLM, so 2-GPU mode doesn't actually work yet
-        # Using 0.65 to be safe
-        worker_gpu_mem = 0.65 if worker_device_id is not None else self.config.gpu_memory_utilization
+        if use_server_engine:
+            # True 2-GPU mode: vLLM server on second GPU, planner on first GPU
+            worker_gpu_id = visible_gpus[1]  # Physical GPU ID for vLLM server
+            print(f"✓ 2-GPU mode: planner on GPU {visible_gpus[0]}, worker server on GPU {worker_gpu_id}")
 
-        if worker_device_id is not None:
-            print(f"✓ 2-GPU mode detected: {torch.cuda.device_count()} GPUs available")
-            print(f"  Worker GPU memory: {worker_gpu_mem} (attempting separate GPU)")
+            from llm_economist.inference.vllm_server_engine import VLLMServerEngine
+            self.worker_engine = VLLMServerEngine(
+                model_name=worker_model_path,
+                gpu_id=worker_gpu_id,
+                port=8100,
+                gpu_memory_utilization=0.85,  # Full utilization on dedicated GPU
+                max_model_len=4096,
+                quantization=quant_str,
+            )
+            self._use_server_engine = True
         else:
+            # Single GPU mode: both models share the GPU
+            worker_gpu_mem = self.config.gpu_memory_utilization
             print(f"✓ 1-GPU mode: worker and planner sharing cuda:0")
             print(f"  Worker GPU memory: {worker_gpu_mem} (shared with planner)")
 
-        self.worker_engine = ScalableInferenceEngine(
-            model_name=worker_model_path,
-            quantization=quant_str,
-            tensor_parallel_size=1,
-            gpu_memory_utilization=worker_gpu_mem,  # ⚡ Higher utilization when dedicated GPU
-            max_model_len=4096,
-            text_only_mode=model_config.text_only_mode,
-            enforce_eager=True,
-            enable_prefix_caching=self.config.enable_prefix_caching,  # ⚡ OPTIMIZED: Enable if safe
-            enable_chunked_prefill=False,  # Disable for FlashInfer stability
-            device_id=worker_device_id,  # ⚡ Use separate GPU if available
-        )
+            self.worker_engine = ScalableInferenceEngine(
+                model_name=worker_model_path,
+                quantization=quant_str,
+                tensor_parallel_size=1,
+                gpu_memory_utilization=worker_gpu_mem,
+                max_model_len=4096,
+                text_only_mode=model_config.text_only_mode,
+                enforce_eager=True,
+                enable_prefix_caching=self.config.enable_prefix_caching,
+                enable_chunked_prefill=False,
+            )
+            self._use_server_engine = False
+
+        # Start vLLM server if using server engine
+        if self._use_server_engine:
+            print("Starting vLLM server (this may take 1-2 minutes)...")
+            await self.worker_engine.start(timeout=180)
 
         print("Worker engine loaded.\n")
 
