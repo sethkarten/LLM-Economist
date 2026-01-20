@@ -187,6 +187,9 @@ class VLLMServerEngine:
 
         # SEQUENTIAL processing - vLLM server can't handle concurrent requests reliably
         # This is slower but much more stable
+        consecutive_failures = 0
+        max_consecutive_failures = 5  # Restart server after 5 consecutive failures
+
         async with aiohttp.ClientSession() as session:
             results = []
             for i, prompt in enumerate(batch.prompts):
@@ -203,6 +206,23 @@ class VLLMServerEngine:
                         temperature, 0.9  # top_p
                     )
                     results.append(result)
+                    consecutive_failures = 0  # Reset on success
+                except aiohttp.ClientConnectorError as e:
+                    consecutive_failures += 1
+                    results.append(e)
+
+                    # Server might have crashed - try to restart
+                    if consecutive_failures >= max_consecutive_failures:
+                        print(f"[VLLMServer] {consecutive_failures} consecutive failures, restarting server...", flush=True)
+                        self.stop()
+                        await asyncio.sleep(2)
+                        try:
+                            await self.start(timeout=120)
+                            consecutive_failures = 0
+                            print("[VLLMServer] Server restarted successfully", flush=True)
+                        except Exception as restart_err:
+                            print(f"[VLLMServer] Failed to restart server: {restart_err}", flush=True)
+                            break  # Give up if restart fails
                 except Exception as e:
                     results.append(e)
 

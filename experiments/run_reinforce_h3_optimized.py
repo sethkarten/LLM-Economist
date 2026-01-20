@@ -590,7 +590,7 @@ class REINFORCEExperiment:
                 model_name=worker_model_path,
                 gpu_id=worker_gpu_id,
                 port=8100,
-                gpu_memory_utilization=0.85,  # Full utilization on dedicated GPU
+                gpu_memory_utilization=0.70,  # Reduced from 0.85 for stability
                 max_model_len=4096,
                 quantization=quant_str,
             )
