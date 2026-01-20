@@ -565,11 +565,13 @@ class REINFORCEExperiment:
         worker_device_id = 1 if torch.cuda.device_count() > 1 else None
 
         # If using separate GPU, can use higher memory utilization (no sharing with planner)
-        worker_gpu_mem = 0.85 if worker_device_id is not None else self.config.gpu_memory_utilization
+        # NOTE: torch.cuda.set_device() doesn't work for vLLM, so 2-GPU mode doesn't actually work yet
+        # Using 0.65 to be safe
+        worker_gpu_mem = 0.65 if worker_device_id is not None else self.config.gpu_memory_utilization
 
         if worker_device_id is not None:
-            print(f"✓ 2-GPU mode: worker on cuda:{worker_device_id}, planner on cuda:0")
-            print(f"  Worker GPU memory: 0.85 (dedicated GPU)")
+            print(f"✓ 2-GPU mode detected: {torch.cuda.device_count()} GPUs available")
+            print(f"  Worker GPU memory: {worker_gpu_mem} (attempting separate GPU)")
         else:
             print(f"✓ 1-GPU mode: worker and planner sharing cuda:0")
             print(f"  Worker GPU memory: {worker_gpu_mem} (shared with planner)")
