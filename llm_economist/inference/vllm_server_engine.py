@@ -186,7 +186,7 @@ class VLLMServerEngine:
         is_json_valid = []
 
         # Limit concurrent requests to avoid overwhelming the server
-        max_concurrent = 20  # Process in batches of 20
+        max_concurrent = 10  # Reduced from 20 for better stability
         connector = aiohttp.TCPConnector(limit=max_concurrent)
 
         async with aiohttp.ClientSession(connector=connector) as session:
@@ -249,8 +249,9 @@ class VLLMServerEngine:
         max_tokens: int,
         temperature: float,
         top_p: float,
+        max_retries: int = 3,
     ) -> Tuple[str, float]:
-        """Generate a single response."""
+        """Generate a single response with retry logic."""
         start_time = time.time()
 
         payload = {
@@ -261,20 +262,33 @@ class VLLMServerEngine:
             "top_p": top_p,
         }
 
-        async with session.post(
-            f"{self._base_url}/v1/completions",
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=120),  # Increased timeout
-        ) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise RuntimeError(f"vLLM server error: {text}")
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                async with session.post(
+                    f"{self._base_url}/v1/completions",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise RuntimeError(f"vLLM server error: {text}")
 
-            data = await resp.json()
-            generated_text = data["choices"][0]["text"]
-            latency = time.time() - start_time
+                    data = await resp.json()
+                    generated_text = data["choices"][0]["text"]
+                    latency = time.time() - start_time
 
-            return generated_text, latency
+                    return generated_text, latency
+            except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
+                    logger.warning(f"Request failed (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
+
+        raise last_error if last_error else RuntimeError("All retries failed")
 
     def __del__(self):
         """Cleanup on deletion."""
