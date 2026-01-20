@@ -178,6 +178,11 @@ class ScalableInferenceEngine:
             return
 
         try:
+            # CRITICAL: Force vLLM V0 engine for reliable shutdown/restart
+            # V1 engine has multiprocessing issues that prevent proper GPU memory cleanup
+            import os
+            os.environ['VLLM_USE_V1'] = '0'
+
             from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
             self._SamplingParams = SamplingParams
 
