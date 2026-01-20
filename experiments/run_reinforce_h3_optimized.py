@@ -562,7 +562,6 @@ class REINFORCEExperiment:
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...")
 
         # Use separate GPU for worker engine if available (cuda:1, physical GPU 3 when CUDA_VISIBLE_DEVICES=2,3)
-        import torch
         worker_device_id = 1 if torch.cuda.device_count() > 1 else None
 
         # If using separate GPU, can use higher memory utilization (no sharing with planner)
