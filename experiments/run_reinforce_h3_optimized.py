@@ -111,7 +111,7 @@ class RLConfig:
     lora_dropout: float = 0.05
 
     # GPU optimization
-    gpu_memory_utilization: float = 0.30  # Share GPU with planner - reduced for training headroom
+    gpu_memory_utilization: float = 0.20  # Share GPU with planner - reduced for training headroom
     enable_prefix_caching: bool = True  # ⚡ OPTIMIZED: Cache repeated prompts
 
     # Checkpointing
@@ -228,6 +228,12 @@ class PlannerPolicy:
             device_map=device_map,
             trust_remote_code=True,
         )
+
+        # Enable gradient checkpointing to reduce memory during training
+        # Trades compute for memory - essential when sharing GPU with vLLM
+        if hasattr(self.model, 'gradient_checkpointing_enable'):
+            self.model.gradient_checkpointing_enable()
+            print("Enabled gradient checkpointing for memory efficiency")
 
         # Add LoRA adapters
         if self.config.use_lora:
