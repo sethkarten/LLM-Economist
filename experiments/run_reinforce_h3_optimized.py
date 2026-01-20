@@ -574,7 +574,9 @@ class REINFORCEExperiment:
             worker_gpu_id = visible_gpus[1]  # Physical GPU ID for vLLM server
             print(f"✓ 2-GPU mode: planner on GPU {visible_gpus[0]}, worker server on GPU {worker_gpu_id}", flush=True)
 
+            print("[DEBUG] Importing VLLMServerEngine...", flush=True)
             from llm_economist.inference.vllm_server_engine import VLLMServerEngine
+            print("[DEBUG] Creating VLLMServerEngine instance...", flush=True)
             self.worker_engine = VLLMServerEngine(
                 model_name=worker_model_path,
                 gpu_id=worker_gpu_id,
@@ -583,6 +585,7 @@ class REINFORCEExperiment:
                 max_model_len=4096,
                 quantization=quant_str,
             )
+            print("[DEBUG] VLLMServerEngine instance created successfully", flush=True)
             self._use_server_engine = True
         else:
             # Single GPU mode: both models share the GPU
@@ -605,10 +608,10 @@ class REINFORCEExperiment:
 
         # Start vLLM server if using server engine
         if self._use_server_engine:
-            print("Starting vLLM server (this may take 1-2 minutes)...")
+            print("Starting vLLM server (this may take 1-2 minutes)...", flush=True)
             await self.worker_engine.start(timeout=180)
 
-        print("Worker engine loaded.\n")
+        print("Worker engine loaded.\n", flush=True)
 
         # Compute baseline metrics
         if not skip_baseline:
