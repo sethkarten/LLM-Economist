@@ -142,14 +142,17 @@ class RLConfig:
         elif gpu_type.lower() == "a6000_2gpu":
             # 2-GPU mode: planner on GPU 0, vLLM on GPU 1
             # Each GPU can use more memory since they're dedicated
-            return cls(
-                parallel_rollouts=8,  # More parallelism with dedicated vLLM GPU
-                rollouts_per_iter=32,  # More rollouts per iteration
-                gpu_memory_utilization=0.85,  # Higher utilization - dedicated GPU
-                num_agents=1000,  # Full experiment
-                num_iterations=100,  # Full experiment
-                **kwargs
-            )
+            # Only override num_agents/num_iterations if not explicitly provided
+            defaults_2gpu = {
+                "parallel_rollouts": 8,  # More parallelism with dedicated vLLM GPU
+                "rollouts_per_iter": 32,  # More rollouts per iteration
+                "gpu_memory_utilization": 0.85,  # Higher utilization - dedicated GPU
+                "num_agents": 1000,  # Full experiment default
+                "num_iterations": 100,  # Full experiment default
+            }
+            # kwargs takes precedence over defaults
+            merged = {**defaults_2gpu, **kwargs}
+            return cls(**merged)
         else:  # A6000 1-GPU or default
             return cls(
                 parallel_rollouts=4,  # A6000 has 48GB
@@ -1239,14 +1242,14 @@ async def main():
     )
     parser.add_argument("--gpu", type=str, default="a6000", choices=["a6000", "a6000_2gpu", "b200"],
                        help="GPU type: a6000 (1-GPU), a6000_2gpu (2-GPU, 2x faster), b200")
-    parser.add_argument("--num-iterations", type=int, default=100,
-                       help="Number of training iterations")
+    parser.add_argument("--num-iterations", type=int, default=None,
+                       help="Number of training iterations (auto-set based on GPU if not specified)")
     parser.add_argument("--rollouts-per-iter", type=int, default=None,
                        help="Rollouts per iteration (auto-set based on GPU if not specified)")
     parser.add_argument("--parallel-rollouts", type=int, default=None,
                        help="Parallel rollouts (auto-set based on GPU if not specified)")
-    parser.add_argument("--num-agents", type=int, default=100,
-                       help="Number of worker agents")
+    parser.add_argument("--num-agents", type=int, default=None,
+                       help="Number of worker agents (auto-set based on GPU if not specified)")
     parser.add_argument("--learning-rate", type=float, default=5e-5,
                        help="Learning rate")
     parser.add_argument("--seed", type=int, default=42,
@@ -1259,15 +1262,18 @@ async def main():
     args = parser.parse_args()
 
     # Create config optimized for GPU type
+    # Only include args that were explicitly provided (not None defaults)
     config_kwargs = {
         "experiment": "h3",
-        "num_agents": args.num_agents,
-        "num_iterations": args.num_iterations,
         "learning_rate": args.learning_rate,
         "seed": args.seed,
     }
 
-    # Override with command-line args if provided
+    # Override with command-line args if explicitly provided
+    if args.num_agents is not None:
+        config_kwargs["num_agents"] = args.num_agents
+    if args.num_iterations is not None:
+        config_kwargs["num_iterations"] = args.num_iterations
     if args.rollouts_per_iter is not None:
         config_kwargs["rollouts_per_iter"] = args.rollouts_per_iter
     if args.parallel_rollouts is not None:
