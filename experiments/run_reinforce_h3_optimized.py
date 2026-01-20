@@ -186,10 +186,11 @@ class PlannerPolicy:
     Uses torch-based generation to get log probabilities for training.
     """
 
-    def __init__(self, model_name: str, config: RLConfig, device: str = "cuda"):
+    def __init__(self, model_name: str, config: RLConfig, device: str = "cuda", force_single_gpu: bool = False):
         self.model_name = model_name
         self.config = config
         self.device = device
+        self.force_single_gpu = force_single_gpu
 
         self.model = None
         self.tokenizer = None
@@ -218,10 +219,13 @@ class PlannerPolicy:
         # Load base model in BF16 (full precision for speed)
         # A6000 (48GB) and B200 (140GB) have plenty of memory - no need for quantization!
         # 8B model in BF16: ~16GB, leaves plenty for vLLM workers
+        # CRITICAL: In 2-GPU mode, force planner to cuda:0 only (cuda:1 is for vLLM)
+        device_map = {"": 0} if self.force_single_gpu else "auto"
+        print(f"Loading planner with device_map={device_map} (force_single_gpu={self.force_single_gpu})", flush=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
+            device_map=device_map,
             trust_remote_code=True,
         )
 
@@ -527,11 +531,21 @@ class REINFORCEExperiment:
         print(f"Agents: {self.config.num_agents}")
         print(f"{'='*60}\n")
 
+        # CRITICAL: Detect 2-GPU mode BEFORE loading planner
+        # This determines whether planner should use cuda:0 only
+        cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        print(f"[DEBUG] CUDA_VISIBLE_DEVICES = '{cuda_visible}'", flush=True)
+        visible_gpus = [int(g.strip()) for g in cuda_visible.split(",") if g.strip().isdigit()] if cuda_visible else []
+        self._use_2gpu_mode = len(visible_gpus) >= 2
+        print(f"[DEBUG] visible_gpus = {visible_gpus}, 2-GPU mode = {self._use_2gpu_mode}", flush=True)
+
         # Load trainable planner policy (torch-based)
+        # In 2-GPU mode, force planner to cuda:0 (cuda:1 is for vLLM server)
         self.planner_policy = PlannerPolicy(
             model_name=self.config.planner_model,
             config=self.config,
-            device="cuda" if torch.cuda.is_available() else "cpu"
+            device="cuda:0" if self._use_2gpu_mode else ("cuda" if torch.cuda.is_available() else "cpu"),
+            force_single_gpu=self._use_2gpu_mode,
         )
         self.planner_policy.load_model()
 
@@ -561,16 +575,11 @@ class REINFORCEExperiment:
 
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...", flush=True)
 
-        # Check for 2-GPU mode: parse CUDA_VISIBLE_DEVICES to get physical GPU IDs
-        cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        print(f"[DEBUG] CUDA_VISIBLE_DEVICES = '{cuda_visible}'", flush=True)
-        visible_gpus = [int(g.strip()) for g in cuda_visible.split(",") if g.strip().isdigit()] if cuda_visible else []
-        use_server_engine = len(visible_gpus) >= 2
-
-        print(f"[DEBUG] visible_gpus = {visible_gpus}, use_server_engine = {use_server_engine}", flush=True)
-
-        if use_server_engine:
-            # True 2-GPU mode: vLLM server on second GPU, planner on first GPU
+        # Use the already-detected 2-GPU mode flag
+        if self._use_2gpu_mode:
+            # Re-parse visible GPUs to get the second GPU ID for vLLM server
+            cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+            visible_gpus = [int(g.strip()) for g in cuda_visible.split(",") if g.strip().isdigit()]
             worker_gpu_id = visible_gpus[1]  # Physical GPU ID for vLLM server
             print(f"✓ 2-GPU mode: planner on GPU {visible_gpus[0]}, worker server on GPU {worker_gpu_id}", flush=True)
 
@@ -586,7 +595,6 @@ class REINFORCEExperiment:
                 quantization=quant_str,
             )
             print("[DEBUG] VLLMServerEngine instance created successfully", flush=True)
-            self._use_server_engine = True
         else:
             # Single GPU mode: both models share the GPU
             worker_gpu_mem = self.config.gpu_memory_utilization
@@ -604,10 +612,9 @@ class REINFORCEExperiment:
                 enable_prefix_caching=self.config.enable_prefix_caching,
                 enable_chunked_prefill=False,
             )
-            self._use_server_engine = False
 
-        # Start vLLM server if using server engine
-        if self._use_server_engine:
+        # Start vLLM server if using 2-GPU mode
+        if self._use_2gpu_mode:
             print("Starting vLLM server (this may take 1-2 minutes)...", flush=True)
             await self.worker_engine.start(timeout=180)
 
@@ -615,9 +622,9 @@ class REINFORCEExperiment:
 
         # Compute baseline metrics
         if not skip_baseline:
-            print("Computing baseline (US federal progressive tax 2024)...")
+            print("Computing baseline (US federal progressive tax 2024)...", flush=True)
             self.baseline_metrics = await self._compute_baseline()
-            print(f"Baseline SWF: {self.baseline_metrics['swf']:.2f}")
+            print(f"Baseline SWF: {self.baseline_metrics['swf']:.2f}", flush=True)
             print(f"Baseline Gini: {self.baseline_metrics['gini']:.3f}")
             print(f"Baseline Labor: {self.baseline_metrics['mean_labor']:.1f} hours/week\n")
         else:
