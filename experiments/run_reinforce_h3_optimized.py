@@ -85,8 +85,8 @@ Output: {{"tax_rates": [rate1, rate2, ...], "brackets": [threshold1, threshold2,
 class RLConfig:
     """Configuration for REINFORCE++ H3 training."""
     experiment: str = "h3"
-    planner_model: str = "Qwen/Qwen2.5-3B-Instruct"  # Trainable with LoRA (smaller for debugging)
-    worker_model: str = "qwen3-4b"  # vLLM compatible
+    planner_model: str = "Qwen/Qwen3-4B-Instruct"  # Per EXPERIMENT_PLAN.md H-series
+    worker_model: str = "gemma3-4b"  # Per EXPERIMENT_PLAN.md: gemma-3-4b (frozen, bounded rational)
 
     # Environment
     num_agents: int = 100
