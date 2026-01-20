@@ -188,6 +188,13 @@ class ScalableInferenceEngine:
 
             logger.info(f"Initializing vLLM engine with config: {self._config}")
 
+            # Debug: Check HF_TOKEN availability for gated models
+            hf_token = os.environ.get('HF_TOKEN', '')
+            if hf_token:
+                print(f"[DEBUG] HF_TOKEN is set (length={len(hf_token)}, starts with {hf_token[:10]}...)", flush=True)
+            else:
+                print("[DEBUG] WARNING: HF_TOKEN not set - gated models will fail!", flush=True)
+
             engine_args = AsyncEngineArgs(**self._config)
             self._engine = AsyncLLMEngine.from_engine_args(engine_args)
             self._initialized = True
