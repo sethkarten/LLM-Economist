@@ -340,6 +340,90 @@ class PlannerPolicy:
 
         return selected_log_probs.sum()
 
+    def compute_log_prob_batch(
+        self,
+        prompts_and_actions: List[Tuple[str, str, List[float]]],
+    ) -> torch.Tensor:
+        """
+        Compute log probabilities for a batch of actions (for training).
+
+        Args:
+            prompts_and_actions: List of (system_prompt, user_prompt, tax_rates) tuples
+
+        Returns:
+            Tensor of log probabilities, shape (batch_size,)
+        """
+        batch_input_ids = []
+        batch_response_lengths = []
+
+        # Tokenize all prompts and responses
+        for system_prompt, user_prompt, tax_rates in prompts_and_actions:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            full_prompt = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+            # Format expected response
+            expected_response = json.dumps({"tax_rates": [round(r, 3) for r in tax_rates]})
+
+            # Tokenize
+            prompt_ids = self.tokenizer(full_prompt, return_tensors="pt")["input_ids"]
+            response_ids = self.tokenizer(expected_response, return_tensors="pt", add_special_tokens=False)["input_ids"]
+
+            # Concatenate
+            input_ids = torch.cat([prompt_ids, response_ids], dim=1).squeeze(0)
+
+            batch_input_ids.append(input_ids)
+            batch_response_lengths.append(response_ids.shape[1])
+
+        # Pad to same length
+        max_len = max(ids.shape[0] for ids in batch_input_ids)
+        padded_input_ids = []
+        attention_mask = []
+
+        for ids in batch_input_ids:
+            pad_len = max_len - ids.shape[0]
+            if pad_len > 0:
+                ids = torch.cat([torch.full((pad_len,), self.tokenizer.pad_token_id, dtype=ids.dtype), ids])
+            padded_input_ids.append(ids)
+            attention_mask.append(torch.ones_like(ids))
+            attention_mask[-1][:pad_len] = 0  # Mask padding tokens
+
+        # Stack into batch
+        input_ids_batch = torch.stack(padded_input_ids).to(self.device)
+        attention_mask_batch = torch.stack(attention_mask).to(self.device)
+
+        # Single forward pass for entire batch
+        with torch.enable_grad():
+            outputs = self.model(input_ids_batch, attention_mask=attention_mask_batch)
+            logits = outputs.logits
+
+        # Compute log probs for each sample in batch
+        log_probs_list = []
+        for i, response_len in enumerate(batch_response_lengths):
+            # Find where response starts (accounting for padding)
+            pad_len = max_len - batch_input_ids[i].shape[0]
+            prompt_len = batch_input_ids[i].shape[0] - response_len
+            response_start = pad_len + prompt_len
+
+            # Extract response logits and token IDs
+            response_logits = logits[i, response_start-1:response_start+response_len-1, :]
+            response_token_ids = input_ids_batch[i, response_start:response_start+response_len]
+
+            # Compute log probs
+            log_probs = F.log_softmax(response_logits, dim=-1)
+            selected_log_probs = log_probs[range(len(response_token_ids)), response_token_ids]
+
+            log_probs_list.append(selected_log_probs.sum())
+
+        return torch.stack(log_probs_list)
+
     def _compute_log_prob(self, scores: Tuple[torch.Tensor, ...], generated_ids: torch.Tensor) -> float:
         """Compute log probability of generated sequence."""
         total_log_prob = 0.0
@@ -771,17 +855,12 @@ Hours to work this week (0-100)? Number only:"""
         if rewards.std() > 1e-8:
             advantages = advantages / (rewards.std() + 1e-8)
 
-        # Recompute log probs with gradients
-        new_log_probs = []
-        for rollout_data in rollout_data_list:
-            log_prob = self.planner_policy.compute_log_prob_for_action(
-                system_prompt=rollout_data["system_prompt"],
-                user_prompt=rollout_data["user_prompt"],
-                tax_rates=rollout_data["action"]["tax_rates"],
-            )
-            new_log_probs.append(log_prob)
-
-        new_log_probs = torch.stack(new_log_probs)
+        # Recompute log probs with gradients (BATCHED for efficiency)
+        prompts_and_actions = [
+            (r["system_prompt"], r["user_prompt"], r["action"]["tax_rates"])
+            for r in rollout_data_list
+        ]
+        new_log_probs = self.planner_policy.compute_log_prob_batch(prompts_and_actions)
 
         # Policy gradient loss: -E[log π(a|s) * A]
         pg_loss = -(new_log_probs * advantages).mean()
