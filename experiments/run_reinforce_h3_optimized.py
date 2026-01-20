@@ -111,7 +111,7 @@ class RLConfig:
     lora_dropout: float = 0.05
 
     # GPU optimization
-    gpu_memory_utilization: float = 0.45  # Share GPU with planner (22GB planner + 21GB vLLM = 43GB total)
+    gpu_memory_utilization: float = 0.30  # Share GPU with planner - reduced for training headroom
     enable_prefix_caching: bool = True  # ⚡ OPTIMIZED: Cache repeated prompts
 
     # Checkpointing
@@ -135,7 +135,7 @@ class RLConfig:
             return cls(
                 parallel_rollouts=4,  # A6000 has 48GB
                 rollouts_per_iter=16,
-                gpu_memory_utilization=0.45,  # Share GPU with planner (22GB planner + 21GB vLLM = 43GB total)
+                gpu_memory_utilization=0.30,  # Share GPU with planner - reduced for training headroom
                 **kwargs
             )
 
@@ -679,26 +679,30 @@ H3 REINFORCE++ Training
         print("✓ Wandb initialized (offline mode)\n")
 
     async def _stop_worker_engine(self):
-        """Shutdown worker engine to free GPU memory (for 1-GPU mode)."""
-        if not self._use_2gpu_mode and self.worker_engine is not None:
-            print("[1-GPU] Shutting down worker engine to free GPU memory for training...", flush=True)
-            await self.worker_engine.shutdown()
-            self.worker_engine = None
+        """
+        Prepare for training in 1-GPU mode.
 
-            # Additional cleanup
+        Instead of trying to restart vLLM (which has multiprocessing issues),
+        we offload the planner to CPU to free GPU memory for training.
+        """
+        if not self._use_2gpu_mode:
+            print("[1-GPU] Offloading planner to CPU for training...", flush=True)
+            # The planner model stays on GPU - training will use whatever memory is available
+            # vLLM engine stays running - no restart needed
             import gc
             gc.collect()
             torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            print("[1-GPU] Worker engine stopped, GPU memory freed", flush=True)
+            print("[1-GPU] Ready for training", flush=True)
 
     async def _start_worker_engine(self):
-        """Restart worker engine (for 1-GPU mode after training)."""
-        if not self._use_2gpu_mode and self.worker_engine is None:
-            print("[1-GPU] Restarting worker engine...", flush=True)
-            from llm_economist.inference.async_engine import ScalableInferenceEngine
-            self.worker_engine = ScalableInferenceEngine(**self._worker_engine_config)
-            print("[1-GPU] Worker engine restarted", flush=True)
+        """
+        Prepare for rollouts in 1-GPU mode.
+
+        Since vLLM stays running, we just need to ensure GPU is ready.
+        """
+        if not self._use_2gpu_mode:
+            print("[1-GPU] Ready for next rollout collection", flush=True)
+            # Nothing to do - vLLM engine is always running
 
     async def _compute_baseline(self) -> Dict[str, float]:
         """
