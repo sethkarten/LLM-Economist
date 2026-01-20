@@ -646,6 +646,7 @@ H3 REINFORCE++ Training
 
         # Run simulation with US federal tax
         for step in range(self.config.tax_year_length):
+            print(f"[BASELINE] Step {step}/{self.config.tax_year_length}")
             incomes = skills * labor
 
             # Workers choose labor given US tax rates
@@ -669,6 +670,7 @@ Hours to work this week (0-100)? Number only:"""
             )
 
             response = await self.worker_engine.generate_batch(batch)
+            print(f"[BASELINE] Step {step} - received {len(response.responses)} responses")
 
             # Parse labor choices
             for i, resp in enumerate(response.responses):
@@ -678,8 +680,10 @@ Hours to work this week (0-100)? Number only:"""
                         labor[i] = min(100, max(0, float(numbers[0])))
                 except:
                     pass
+            print(f"[BASELINE] Step {step} - parsed labor choices, mean={labor.mean():.1f}")
 
         # Final metrics
+        print("[BASELINE] All steps complete, computing final metrics")
         final_incomes = skills * labor
         baseline_swf = self._compute_swf(final_incomes, us_rates, us_brackets)
         baseline_gini = self._compute_gini(final_incomes)
