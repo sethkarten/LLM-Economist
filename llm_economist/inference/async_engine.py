@@ -181,11 +181,10 @@ class ScalableInferenceEngine:
             from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
             self._SamplingParams = SamplingParams
 
-            # Set CUDA device if specified (for multi-GPU setups)
+            # NOTE: torch.cuda.set_device() doesn't work for vLLM and causes device mismatch errors
+            # vLLM always uses the first visible GPU. For multi-GPU, use separate CUDA_VISIBLE_DEVICES per process.
             if self.device_id is not None:
-                import torch
-                torch.cuda.set_device(self.device_id)
-                logger.info(f"Set CUDA device to cuda:{self.device_id} for vLLM engine")
+                logger.warning(f"device_id={self.device_id} specified but not supported by vLLM. vLLM will use cuda:0.")
 
             logger.info(f"Initializing vLLM engine with config: {self._config}")
 
