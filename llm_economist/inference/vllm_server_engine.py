@@ -109,22 +109,53 @@ class VLLMServerEngine:
         print(f"[VLLMServer] Command: {' '.join(cmd)}", flush=True)
         logger.info(f"Starting vLLM server on GPU {self.gpu_id}, port {self.port}")
 
-        # Start the server process
+        # Start the server process - redirect stderr to a file for debugging
+        import tempfile
+        self._stderr_file = tempfile.NamedTemporaryFile(mode='w+', prefix='vllm_stderr_', suffix='.log', delete=False)
+        self._stdout_file = tempfile.NamedTemporaryFile(mode='w+', prefix='vllm_stdout_', suffix='.log', delete=False)
+        print(f"[VLLMServer] Stderr log: {self._stderr_file.name}", flush=True)
+
         self._server_process = subprocess.Popen(
             cmd,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self._stdout_file,
+            stderr=self._stderr_file,
         )
+        print(f"[VLLMServer] Process started with PID {self._server_process.pid}", flush=True)
 
         # Wait for the server to be ready
         start_time = time.time()
         check_count = 0
         while time.time() - start_time < timeout:
             check_count += 1
+
+            # Check if process died
+            poll_result = self._server_process.poll()
+            if poll_result is not None:
+                print(f"[VLLMServer] ✗ Process died with exit code {poll_result}", flush=True)
+                # Read stderr
+                self._stderr_file.flush()
+                self._stderr_file.seek(0)
+                stderr_content = self._stderr_file.read()
+                if stderr_content:
+                    print(f"[VLLMServer] Stderr output:\n{stderr_content[-2000:]}", flush=True)
+                self.stop()
+                raise RuntimeError(f"vLLM server process died with exit code {poll_result}")
+
             if check_count % 10 == 0:
                 elapsed = time.time() - start_time
                 print(f"[VLLMServer] Waiting for server... ({elapsed:.0f}s elapsed)", flush=True)
+                # Print any stderr output so far
+                try:
+                    self._stderr_file.flush()
+                    current_pos = self._stderr_file.tell()
+                    self._stderr_file.seek(0)
+                    stderr_so_far = self._stderr_file.read()
+                    self._stderr_file.seek(current_pos)
+                    if stderr_so_far and len(stderr_so_far) > 10:
+                        print(f"[VLLMServer] Recent stderr: ...{stderr_so_far[-500:]}", flush=True)
+                except Exception as e:
+                    pass
 
             try:
                 async with aiohttp.ClientSession() as session:
@@ -155,18 +186,17 @@ class VLLMServerEngine:
                     print(f"[VLLMServer] Waiting... (error: {type(e).__name__})")
             await asyncio.sleep(2)
 
-        # Server didn't start in time - try to get error output
+        # Server didn't start in time - get error output
+        print(f"[VLLMServer] ✗ Server failed to start within {timeout}s", flush=True)
         if self._server_process:
-            stderr_output = ""
             try:
-                # Non-blocking read of stderr
-                self._server_process.stderr.flush()
-                stderr_output = self._server_process.stderr.read(4096).decode() if self._server_process.stderr else ""
+                self._stderr_file.flush()
+                self._stderr_file.seek(0)
+                stderr_content = self._stderr_file.read()
+                if stderr_content:
+                    print(f"[VLLMServer] Full stderr:\n{stderr_content[-3000:]}", flush=True)
             except:
                 pass
-            print(f"[VLLMServer] ✗ Server failed to start within {timeout}s")
-            if stderr_output:
-                print(f"[VLLMServer] Stderr: {stderr_output[:1000]}")
 
         self.stop()
         raise RuntimeError(f"vLLM server failed to start within {timeout}s")
@@ -181,6 +211,13 @@ class VLLMServerEngine:
                 self._server_process.kill()
             self._server_process = None
         self._initialized = False
+        # Clean up temp files
+        for attr in ['_stderr_file', '_stdout_file']:
+            if hasattr(self, attr) and getattr(self, attr):
+                try:
+                    getattr(self, attr).close()
+                except:
+                    pass
 
     async def shutdown(self):
         """Async shutdown method for interface compatibility with ScalableInferenceEngine."""
