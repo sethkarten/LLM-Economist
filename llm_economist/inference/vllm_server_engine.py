@@ -110,15 +110,31 @@ class VLLMServerEngine:
 
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(f"{self._base_url}/health", timeout=2) as resp:
+                    async with session.get(f"{self._base_url}/health", timeout=5) as resp:
                         if resp.status == 200:
-                            elapsed = time.time() - start_time
-                            print(f"[VLLMServer] ✓ Server ready on port {self.port} (took {elapsed:.1f}s)")
-                            logger.info(f"vLLM server ready on port {self.port}")
-                            self._initialized = True
-                            return
-            except Exception:
-                pass
+                            # Do a test completion to ensure model is loaded
+                            test_payload = {
+                                "model": self.model_name,
+                                "prompt": "Hello",
+                                "max_tokens": 1,
+                                "temperature": 0.0,
+                            }
+                            async with session.post(
+                                f"{self._base_url}/v1/completions",
+                                json=test_payload,
+                                timeout=aiohttp.ClientTimeout(total=60)
+                            ) as test_resp:
+                                if test_resp.status == 200:
+                                    elapsed = time.time() - start_time
+                                    print(f"[VLLMServer] ✓ Server ready on port {self.port} (took {elapsed:.1f}s)")
+                                    logger.info(f"vLLM server ready on port {self.port}")
+                                    self._initialized = True
+                                    return
+                                else:
+                                    print(f"[VLLMServer] Server healthy but model not ready yet...")
+            except Exception as e:
+                if check_count % 10 == 0:
+                    print(f"[VLLMServer] Waiting... (error: {type(e).__name__})")
             await asyncio.sleep(2)
 
         # Server didn't start in time - try to get error output
@@ -189,7 +205,8 @@ class VLLMServerEngine:
 
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Request {i} failed: {result}")
+                    print(f"Request {i} failed: {type(result).__name__}: {result}")
+                    logger.error(f"Request {i} failed: {type(result).__name__}: {result}")
                     responses.append("")
                     latencies.append(0.0)
                     is_json_valid.append(False)
@@ -237,7 +254,7 @@ class VLLMServerEngine:
         async with session.post(
             f"{self._base_url}/v1/completions",
             json=payload,
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=120),  # Increased timeout
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
