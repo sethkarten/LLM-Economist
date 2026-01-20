@@ -64,6 +64,15 @@ class VLLMServerEngine:
         if self._initialized:
             return
 
+        # Kill any existing vLLM processes on this port (cleanup from previous runs)
+        try:
+            kill_cmd = f"pkill -9 -f 'vllm.*--port {self.port}' 2>/dev/null || true"
+            subprocess.run(kill_cmd, shell=True, timeout=5)
+            await asyncio.sleep(1)  # Give time for port to be released
+            print(f"[VLLMServer] Cleaned up any stale processes on port {self.port}", flush=True)
+        except Exception as e:
+            logger.warning(f"Cleanup failed (non-fatal): {e}")
+
         # Build the vLLM server command
         cmd = [
             "python", "-m", "vllm.entrypoints.openai.api_server",
