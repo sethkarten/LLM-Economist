@@ -577,16 +577,28 @@ class REINFORCEExperiment:
         worker_model_path = model_config.hf_name
         if os.environ.get('HF_HUB_OFFLINE') == '1':
             # Convert model name to cached snapshot path
+            # Check multiple possible cache locations
             hf_cache = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
-            model_cache_dir = os.path.join(hf_cache, 'hub', f"models--{model_config.hf_name.replace('/', '--')}")
-            if os.path.exists(model_cache_dir):
-                snapshots_dir = os.path.join(model_cache_dir, 'snapshots')
-                if os.path.exists(snapshots_dir):
-                    # Use the first (and usually only) snapshot
-                    snapshots = os.listdir(snapshots_dir)
-                    if snapshots:
-                        worker_model_path = os.path.join(snapshots_dir, snapshots[0])
-                        print(f"Offline mode: using cached model at {worker_model_path}")
+            model_dir_name = f"models--{model_config.hf_name.replace('/', '--')}"
+
+            # Try locations: root, hub/, download_dir
+            possible_paths = [
+                os.path.join(hf_cache, model_dir_name),  # Direct in cache root
+                os.path.join(hf_cache, 'hub', model_dir_name),  # In hub/ subdir
+                os.path.join('/data1/milkkarten/.cache/huggingface', model_dir_name),  # Cynthia-specific
+            ]
+
+            for model_cache_dir in possible_paths:
+                if os.path.exists(model_cache_dir):
+                    snapshots_dir = os.path.join(model_cache_dir, 'snapshots')
+                    if os.path.exists(snapshots_dir):
+                        snapshots = os.listdir(snapshots_dir)
+                        if snapshots:
+                            worker_model_path = os.path.join(snapshots_dir, snapshots[0])
+                            print(f"Offline mode: using cached model at {worker_model_path}")
+                            break
+            else:
+                print(f"WARNING: Could not find cached model for {model_config.hf_name}")
 
         print(f"\nLoading worker engine with {quant_str or 'no'} quantization...", flush=True)
 
