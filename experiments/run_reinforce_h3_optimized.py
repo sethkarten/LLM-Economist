@@ -203,18 +203,16 @@ class PlannerPolicy:
 
         print(f"Loading trainable planner: {self.model_name}")
 
-        # Use cached models (SLURM nodes have no internet)
-        # For offline mode, use the snapshot directory directly instead of model name
-        # This avoids transformers trying to contact HuggingFace API
-        model_cache_path = "/scratch/gpfs/CHIJ/milkkarten/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
+        # Use cached models
+        # Use model name and let HF cache handle it
+        model_name_or_path = self.model_name
 
-        print(f"Loading from snapshot: {model_cache_path}")
+        print(f"Loading from: {model_name_or_path}")
 
-        # Load tokenizer from snapshot
+        # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_cache_path,
+            model_name_or_path,
             trust_remote_code=True,
-            local_files_only=True,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -223,11 +221,10 @@ class PlannerPolicy:
         # A6000 (48GB) and B200 (140GB) have plenty of memory - no need for quantization!
         # 8B model in BF16: ~16GB, leaves plenty for vLLM workers
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_cache_path,
+            model_name_or_path,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
-            local_files_only=True,
         )
 
         # Add LoRA adapters
