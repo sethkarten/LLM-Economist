@@ -26,17 +26,15 @@ os.environ['VLLM_USE_V1'] = '0'
 # CRITICAL: Disable PyTorch compilation to avoid 10+ min hang
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 os.environ['TORCHDYNAMO_DISABLE'] = '1'
-# CRITICAL: Force offline mode and use cached models only
-# SLURM compute nodes have NO internet access
-os.environ['HF_DATASETS_OFFLINE'] = '1'
-os.environ['HF_HUB_OFFLINE'] = '1'
-os.environ['TRANSFORMERS_OFFLINE'] = '1'
-# Point to HuggingFace cache directory (models are pre-downloaded)
-os.environ['HF_HOME'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface'
-os.environ['TRANSFORMERS_CACHE'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface/hub'
-# Wandb offline mode for SLURM
-os.environ['WANDB_MODE'] = 'offline'
-os.environ['WANDB_DIR'] = '/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/wandb'
+# CRITICAL: Only use offline mode on SLURM (compute nodes have no internet)
+if 'SLURM_JOB_ID' in os.environ:
+    os.environ['HF_DATASETS_OFFLINE'] = '1'
+    os.environ['HF_HUB_OFFLINE'] = '1'
+    os.environ['TRANSFORMERS_OFFLINE'] = '1'
+    os.environ['HF_HOME'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface'
+    os.environ['TRANSFORMERS_CACHE'] = '/scratch/gpfs/CHIJ/milkkarten/huggingface/hub'
+    os.environ['WANDB_MODE'] = 'offline'
+    os.environ['WANDB_DIR'] = '/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/wandb'
 
 import argparse
 import asyncio
