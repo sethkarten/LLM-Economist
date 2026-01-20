@@ -393,8 +393,8 @@ class PlannerPolicy:
             attention_mask.append(torch.ones_like(ids))
             attention_mask[-1][:pad_len] = 0  # Mask padding tokens
 
-        # Process in chunks to avoid OOM (chunk_size=4)
-        chunk_size = 4
+        # Process in chunks to avoid OOM (chunk_size=2 for shared GPU)
+        chunk_size = 2
         all_log_probs = []
 
         for chunk_start in range(0, len(padded_input_ids), chunk_size):
