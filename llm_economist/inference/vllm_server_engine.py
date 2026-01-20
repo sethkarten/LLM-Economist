@@ -95,6 +95,15 @@ class VLLMServerEngine:
         env["TORCHDYNAMO_DISABLE"] = "1"
         env["VLLM_USE_V1"] = "0"
 
+        # Pass HF_TOKEN if available, otherwise enable offline mode
+        if os.environ.get("HF_TOKEN"):
+            env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+            print(f"[VLLMServer] Passing HF_TOKEN to subprocess", flush=True)
+        else:
+            env["HF_HUB_OFFLINE"] = "1"
+            env["TRANSFORMERS_OFFLINE"] = "1"
+            print(f"[VLLMServer] No HF_TOKEN - enabling offline mode for subprocess", flush=True)
+
         print(f"[VLLMServer] Starting vLLM server on physical GPU {self.gpu_id}, port {self.port}", flush=True)
         print(f"[VLLMServer] Model: {self.model_name}", flush=True)
         print(f"[VLLMServer] Command: {' '.join(cmd)}", flush=True)

@@ -13,8 +13,11 @@ Expected performance:
 - B200: 1000 iters in ~7 hours (was ~450 hours)
 
 Usage:
-    # Test on Pikachu A6000
-    python experiments/run_reinforce_h3_optimized.py --gpu a6000 --seed 42 --num-iterations 100
+    # Test on single A6000
+    python experiments/run_reinforce_h3_optimized.py --gpu a6000 --seed 42 --num-iterations 3
+
+    # Full experiment on 2x A6000 (2× faster)
+    python experiments/run_reinforce_h3_optimized.py --gpu a6000_2gpu --seed 42
 
     # Production on B200
     python experiments/run_reinforce_h3_optimized.py --gpu b200 --seed 42 --num-iterations 1000
@@ -136,7 +139,18 @@ class RLConfig:
                 gpu_memory_utilization=0.75,  # Increased since we're using less parallelism
                 **kwargs
             )
-        else:  # A6000 or default
+        elif gpu_type.lower() == "a6000_2gpu":
+            # 2-GPU mode: planner on GPU 0, vLLM on GPU 1
+            # Each GPU can use more memory since they're dedicated
+            return cls(
+                parallel_rollouts=8,  # More parallelism with dedicated vLLM GPU
+                rollouts_per_iter=32,  # More rollouts per iteration
+                gpu_memory_utilization=0.85,  # Higher utilization - dedicated GPU
+                num_agents=1000,  # Full experiment
+                num_iterations=100,  # Full experiment
+                **kwargs
+            )
+        else:  # A6000 1-GPU or default
             return cls(
                 parallel_rollouts=4,  # A6000 has 48GB
                 rollouts_per_iter=16,
@@ -617,11 +631,12 @@ class REINFORCEExperiment:
                 model_name=worker_model_path,
                 gpu_id=worker_gpu_id,
                 port=8100,
-                gpu_memory_utilization=0.70,  # Reduced from 0.85 for stability
+                gpu_memory_utilization=0.85,  # Full utilization - dedicated GPU in 2-GPU mode
                 max_model_len=4096,
                 quantization=quant_str,
             )
             print("[DEBUG] VLLMServerEngine instance created successfully", flush=True)
+            print(f"✓ 2-GPU mode configured: planner on cuda:0, vLLM server on GPU {worker_gpu_id}", flush=True)
         else:
             # Single GPU mode: both models share the GPU
             worker_gpu_mem = self.config.gpu_memory_utilization
@@ -1222,8 +1237,8 @@ async def main():
         description="REINFORCE++ H3 Experiment: OPTIMIZED for Maximum GPU Utilization",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--gpu", type=str, default="a6000", choices=["a6000", "b200"],
-                       help="GPU type (determines memory and parallelism config)")
+    parser.add_argument("--gpu", type=str, default="a6000", choices=["a6000", "a6000_2gpu", "b200"],
+                       help="GPU type: a6000 (1-GPU), a6000_2gpu (2-GPU, 2x faster), b200")
     parser.add_argument("--num-iterations", type=int, default=100,
                        help="Number of training iterations")
     parser.add_argument("--rollouts-per-iter", type=int, default=None,
