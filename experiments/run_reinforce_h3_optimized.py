@@ -559,17 +559,20 @@ class REINFORCEExperiment:
                         worker_model_path = os.path.join(snapshots_dir, snapshots[0])
                         print(f"Offline mode: using cached model at {worker_model_path}")
 
-        print(f"\nLoading worker engine with {quant_str or 'no'} quantization...")
+        print(f"\nLoading worker engine with {quant_str or 'no'} quantization...", flush=True)
 
         # Check for 2-GPU mode: parse CUDA_VISIBLE_DEVICES to get physical GPU IDs
         cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        print(f"[DEBUG] CUDA_VISIBLE_DEVICES = '{cuda_visible}'", flush=True)
         visible_gpus = [int(g.strip()) for g in cuda_visible.split(",") if g.strip().isdigit()] if cuda_visible else []
         use_server_engine = len(visible_gpus) >= 2
+
+        print(f"[DEBUG] visible_gpus = {visible_gpus}, use_server_engine = {use_server_engine}", flush=True)
 
         if use_server_engine:
             # True 2-GPU mode: vLLM server on second GPU, planner on first GPU
             worker_gpu_id = visible_gpus[1]  # Physical GPU ID for vLLM server
-            print(f"✓ 2-GPU mode: planner on GPU {visible_gpus[0]}, worker server on GPU {worker_gpu_id}")
+            print(f"✓ 2-GPU mode: planner on GPU {visible_gpus[0]}, worker server on GPU {worker_gpu_id}", flush=True)
 
             from llm_economist.inference.vllm_server_engine import VLLMServerEngine
             self.worker_engine = VLLMServerEngine(
