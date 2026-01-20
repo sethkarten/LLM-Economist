@@ -135,7 +135,7 @@ class RLConfig:
             return cls(
                 parallel_rollouts=4,  # A6000 has 48GB
                 rollouts_per_iter=16,
-                gpu_memory_utilization=0.65,  # Leave room for planner (~16GB BF16) + worker engine
+                gpu_memory_utilization=0.45,  # Share GPU with planner (22GB planner + 21GB vLLM = 43GB total)
                 **kwargs
             )
 
