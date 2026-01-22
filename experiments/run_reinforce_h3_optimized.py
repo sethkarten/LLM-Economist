@@ -72,7 +72,12 @@ Baseline Performance (US 2024 Federal Tax):
 - Gini: {baseline_gini:.3f}
 - Labor: {baseline_labor:.1f} hours/week
 
-Output tax policy as JSON to beat this baseline."""
+RESPONSE FORMAT (required):
+1. Brief strategy (1-3 sentences max)
+2. JSON policy: {{"tax_rates": [r1, r2, r3, r4, r5, r6, r7]}}
+
+The tax_rates array must have exactly 7 values (0.0-0.99) for the 7 US tax brackets.
+Example: {{"tax_rates": [0.08, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]}}"""
 
 H3_USER_TEMPLATE = """## Current Economic State
 
@@ -85,8 +90,8 @@ H3_USER_TEMPLATE = """## Current Economic State
 - Gini: {baseline_gini:.3f}
 - Labor: {baseline_labor:.1f} hours/week
 
-Set tax rates to maximize welfare above baseline.
-Output: {{"tax_rates": [rate1, rate2, ...], "brackets": [threshold1, threshold2, ...]}}"""
+Propose tax rates to maximize welfare. First give 1-3 sentences of strategy, then output JSON.
+Required format: {{"tax_rates": [r1, r2, r3, r4, r5, r6, r7]}}"""
 
 
 @dataclass
@@ -194,14 +199,15 @@ def format_h3_user_prompt(state: Dict[str, Any], baseline_metrics: Dict[str, flo
     )
 
 
-def compute_reward(final_swf: float, baseline_swf: float) -> float:
+def compute_reward(final_swf: float, baseline_swf: float, format_success: bool = True) -> float:
     """
-    Compute reward for H3: Scaled SWF improvement over baseline.
+    Compute reward for H3: Scaled SWF improvement over baseline + format bonus.
 
     FIX: Scale rewards to [0, 1] range for better learning signal.
     Expected improvement: 40 SWF (baseline ~200, target ~240)
 
     Positive reward means planner beat the US federal tax baseline.
+    Format bonus encourages outputting valid JSON.
     """
     raw_improvement = final_swf - baseline_swf
 
@@ -210,7 +216,13 @@ def compute_reward(final_swf: float, baseline_swf: float) -> float:
     expected_range = 40.0  # SWF improvement we're aiming for
     scaled_reward = raw_improvement / expected_range
 
-    return scaled_reward
+    # Format reward: bonus for valid JSON, penalty for invalid
+    if format_success:
+        format_bonus = 0.1  # +0.1 for correct format
+    else:
+        format_bonus = -0.2  # -0.2 penalty for wrong format (stronger to encourage learning)
+
+    return scaled_reward + format_bonus
 
 
 class PlannerPolicy:
@@ -887,10 +899,14 @@ Hours to work this week (0-100)? Number only:"""
             temperature=0.7,
         )
 
+        # Track format success for reward shaping
+        format_success = tax_rates is not None
+
         if not tax_rates:
             # Fallback to US federal rates if parsing fails
             tax_rates = [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37]
             log_prob = -10.0  # Low log prob for failed parse
+            logger.warning(f"Rollout {rollout_id}: Failed to parse JSON, using US federal rates")
 
         # Run full tax year with planner's chosen rates
         for step in range(self.config.tax_year_length):
@@ -931,8 +947,8 @@ Hours to work this week (0-100)? Number only:"""
         final_incomes = skills * labor
         final_swf = self._compute_swf(final_incomes, tax_rates, brackets)
 
-        # Compute reward: Direct comparison to baseline
-        reward = compute_reward(final_swf, self.baseline_metrics["swf"])
+        # Compute reward: Direct comparison to baseline + format bonus
+        reward = compute_reward(final_swf, self.baseline_metrics["swf"], format_success=format_success)
 
         rollout_data = {
             "initial_state": initial_state,
@@ -940,6 +956,7 @@ Hours to work this week (0-100)? Number only:"""
             "final_swf": final_swf,
             "baseline_swf": self.baseline_metrics["swf"],
             "reward": reward,
+            "format_success": format_success,
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
         }
@@ -1091,6 +1108,8 @@ Hours to work this week (0-100)? Number only:"""
                 print(f"  Rollouts: {batch_end}/{self.config.rollouts_per_iter}")
 
             rewards = np.array([r[1] for r in rollouts])
+            format_successes = [r[0].get("format_success", True) for r in rollouts]
+            format_success_rate = sum(format_successes) / len(format_successes)
 
             # ⚡ 1-GPU MODE: Free worker engine memory before training
             await self._stop_worker_engine()
@@ -1106,12 +1125,14 @@ Hours to work this week (0-100)? Number only:"""
                 "reward_std": float(rewards.std()),
                 "reward_max": float(rewards.max()),
                 "reward_min": float(rewards.min()),
+                "format_success_rate": format_success_rate,
                 "time": iter_time,
                 **train_metrics,  # Add training metrics
             }
             self.metrics_history.append(metrics)
 
             print(f"  Reward: {metrics['reward_mean']:.3f} ± {metrics['reward_std']:.3f}")
+            print(f"  Format Success: {format_success_rate*100:.1f}%")
             print(f"  Loss: {metrics['loss/total']:.3f} (PG: {metrics['loss/pg']:.3f})")
             print(f"  LR: {metrics['lr']:.2e}")
             print(f"  Time: {iter_time:.1f}s")
@@ -1150,6 +1171,9 @@ Hours to work this week (0-100)? Number only:"""
 
                 # Performance
                 'time/iteration_seconds': iter_time,
+
+                # Format success (tracks if planner outputs valid JSON)
+                'format/success_rate': format_success_rate,
             }, step=iteration)
 
             # Track best
