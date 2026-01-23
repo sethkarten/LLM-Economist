@@ -906,7 +906,7 @@ Hours to work this week (0-100)? Number only:"""
             # Fallback to US federal rates if parsing fails
             tax_rates = [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37]
             log_prob = -10.0  # Low log prob for failed parse
-            logger.warning(f"Rollout {rollout_id}: Failed to parse JSON, using US federal rates")
+            print(f"[WARNING] Rollout {rollout_id}: Failed to parse JSON, using US federal rates")
 
         # Run full tax year with planner's chosen rates
         for step in range(self.config.tax_year_length):
