@@ -119,7 +119,7 @@ class RLConfig:
     # LoRA
     use_lora: bool = True
     lora_r: int = 8
-    lora_alpha: int = 16
+    lora_alpha: int = 8
     lora_dropout: float = 0.05
 
     # GPU optimization
@@ -390,7 +390,7 @@ class PlannerPolicy:
         log_probs = F.log_softmax(response_logits, dim=-1)
         selected_log_probs = log_probs[range(len(response_token_ids)), response_token_ids]
 
-        return selected_log_probs.sum()
+        return selected_log_probs.mean()
 
     def _compute_log_prob_batch_internal(
         self,
@@ -487,7 +487,7 @@ class PlannerPolicy:
                 log_probs = F.log_softmax(response_logits, dim=-1)
                 selected_log_probs = log_probs[range(len(response_token_ids)), response_token_ids]
 
-                all_log_probs.append(selected_log_probs.sum())
+                all_log_probs.append(selected_log_probs.mean())
 
         return torch.stack(all_log_probs)
 
@@ -523,16 +523,18 @@ class PlannerPolicy:
         return ref_log_probs
 
     def _compute_log_prob(self, scores: Tuple[torch.Tensor, ...], generated_ids: torch.Tensor) -> float:
-        """Compute log probability of generated sequence."""
+        """Compute mean log probability of generated sequence."""
         total_log_prob = 0.0
+        count = 0
 
         for i, (score, token_id) in enumerate(zip(scores, generated_ids)):
             if token_id == self.tokenizer.pad_token_id or token_id == self.tokenizer.eos_token_id:
                 break
             log_probs = F.log_softmax(score[0], dim=-1)
             total_log_prob += log_probs[token_id].item()
+            count += 1
 
-        return total_log_prob
+        return total_log_prob / max(count, 1)
 
     def _parse_tax_rates(self, response: str) -> Optional[List[float]]:
         """Parse tax rates from model response."""
@@ -1093,6 +1095,10 @@ Hours to work this week (0-100)? Number only:"""
 
         # Gradient clipping
         if self.config.max_grad_norm > 0:
+            grad_norm_before = torch.nn.utils.clip_grad_norm_(
+                self.planner_policy.model.parameters(), float('inf')
+            )
+            print(f"  Grad norm before clipping: {grad_norm_before:.4f}")
             torch.nn.utils.clip_grad_norm_(
                 self.planner_policy.model.parameters(),
                 self.config.max_grad_norm
