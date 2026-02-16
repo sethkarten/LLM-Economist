@@ -55,7 +55,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 import wandb
 
 # =============================================================================
@@ -72,9 +72,8 @@ Baseline Performance (US 2024 Federal Tax):
 - Gini: {baseline_gini:.3f}
 - Labor: {baseline_labor:.1f} hours/week
 
-RESPONSE FORMAT (required):
-1. Brief strategy (1-3 sentences max)
-2. JSON policy: {{"tax_rates": [r1, r2, r3, r4, r5, r6, r7]}}
+You MUST respond with ONLY a JSON object. No explanation, no strategy, no other text.
+Required format: {{"tax_rates": [r1, r2, r3, r4, r5, r6, r7]}}
 
 The tax_rates array must have exactly 7 values (0.0-0.99) for the 7 US tax brackets.
 Example: {{"tax_rates": [0.08, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]}}"""
@@ -90,7 +89,7 @@ H3_USER_TEMPLATE = """## Current Economic State
 - Gini: {baseline_gini:.3f}
 - Labor: {baseline_labor:.1f} hours/week
 
-Propose tax rates to maximize welfare. First give 1-3 sentences of strategy, then output JSON.
+Respond with ONLY the JSON object.
 Required format: {{"tax_rates": [r1, r2, r3, r4, r5, r6, r7]}}"""
 
 
@@ -109,18 +108,18 @@ class RLConfig:
     num_iterations: int = 50
     rollouts_per_iter: int = 16
     parallel_rollouts: int = 4  # ⚡ OPTIMIZED: Parallel rollout collection
-    learning_rate: float = 5e-5  # Increased from 1e-5
-    kl_coef: float = 0.01  # Reduced from 0.05
-    entropy_coef: float = 0.01
-    max_grad_norm: float = 1.0
+    learning_rate: float = 1e-6  # Conservative to prevent instruction-following collapse
+    kl_coef: float = 0.1  # Strong KL penalty to prevent drift from base model
+    entropy_coef: float = 0.0
+    max_grad_norm: float = 0.5
 
     # Reward: Direct comparison to baseline with scaling
     # reward = (final_swf - baseline_swf) / expected_range
 
     # LoRA
     use_lora: bool = True
-    lora_r: int = 32
-    lora_alpha: int = 64
+    lora_r: int = 8
+    lora_alpha: int = 16
     lora_dropout: float = 0.05
 
     # GPU optimization
@@ -287,8 +286,7 @@ class PlannerPolicy:
                 r=self.config.lora_r,
                 lora_alpha=self.config.lora_alpha,
                 lora_dropout=self.config.lora_dropout,
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                               "gate_proj", "up_proj", "down_proj"],
+                target_modules=["q_proj", "v_proj"],
                 bias="none",
                 task_type="CAUSAL_LM",
             )
@@ -394,15 +392,17 @@ class PlannerPolicy:
 
         return selected_log_probs.sum()
 
-    def compute_log_prob_batch(
+    def _compute_log_prob_batch_internal(
         self,
         prompts_and_actions: List[Tuple[str, str, List[float]]],
+        enable_grad: bool = True,
     ) -> torch.Tensor:
         """
-        Compute log probabilities for a batch of actions (for training).
+        Internal: compute log probabilities for a batch of actions.
 
         Args:
             prompts_and_actions: List of (system_prompt, user_prompt, tax_rates) tuples
+            enable_grad: Whether to enable gradient computation
 
         Returns:
             Tensor of log probabilities, shape (batch_size,)
@@ -453,6 +453,8 @@ class PlannerPolicy:
         chunk_size = 1
         all_log_probs = []
 
+        grad_context = torch.enable_grad() if enable_grad else torch.no_grad()
+
         for chunk_start in range(0, len(padded_input_ids), chunk_size):
             chunk_end = min(chunk_start + chunk_size, len(padded_input_ids))
             chunk_input_ids = padded_input_ids[chunk_start:chunk_end]
@@ -463,7 +465,7 @@ class PlannerPolicy:
             attention_mask_batch = torch.stack(chunk_attention_mask).to(self.device)
 
             # Forward pass for chunk
-            with torch.enable_grad():
+            with grad_context:
                 outputs = self.model(input_ids_batch, attention_mask=attention_mask_batch)
                 logits = outputs.logits
 
@@ -488,6 +490,37 @@ class PlannerPolicy:
                 all_log_probs.append(selected_log_probs.sum())
 
         return torch.stack(all_log_probs)
+
+    def compute_log_prob_batch(
+        self,
+        prompts_and_actions: List[Tuple[str, str, List[float]]],
+    ) -> torch.Tensor:
+        """
+        Compute log probabilities for a batch of actions (for training, with gradients).
+
+        Args:
+            prompts_and_actions: List of (system_prompt, user_prompt, tax_rates) tuples
+
+        Returns:
+            Tensor of log probabilities, shape (batch_size,)
+        """
+        return self._compute_log_prob_batch_internal(prompts_and_actions, enable_grad=True)
+
+    def compute_ref_log_prob_batch(
+        self,
+        prompts_and_actions: List[Tuple[str, str, List[float]]],
+    ) -> torch.Tensor:
+        """
+        Compute log probs from frozen base model (LoRA disabled).
+
+        Temporarily disables LoRA adapter layers to get reference log probs
+        from the original pretrained model, for KL penalty computation.
+        """
+        self.model.disable_adapter_layers()
+        with torch.no_grad():
+            ref_log_probs = self._compute_log_prob_batch_internal(prompts_and_actions, enable_grad=False)
+        self.model.enable_adapter_layers()
+        return ref_log_probs
 
     def _compute_log_prob(self, scores: Tuple[torch.Tensor, ...], generated_ids: torch.Tensor) -> float:
         """Compute log probability of generated sequence."""
@@ -703,20 +736,26 @@ class REINFORCEExperiment:
             print("Skipping baseline computation (will load from checkpoint)\n")
 
     def setup_optimizer(self):
-        """Setup optimizer and learning rate scheduler."""
+        """Setup optimizer and learning rate scheduler with 10% linear warmup."""
+        import math
+
         self.optimizer = AdamW(
             self.planner_policy.model.parameters(),
             lr=self.config.learning_rate,
         )
 
-        self.scheduler = CosineAnnealingLR(
-            self.optimizer,
-            T_max=self.config.num_iterations,
-            eta_min=self.config.learning_rate * 0.1,
-        )
+        warmup_steps = max(1, int(0.1 * self.config.num_iterations))
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return step / warmup_steps
+            progress = (step - warmup_steps) / max(1, self.config.num_iterations - warmup_steps)
+            return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress))
+
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
 
         print(f"Optimizer: AdamW (lr={self.config.learning_rate})")
-        print(f"Scheduler: CosineAnnealing\n")
+        print(f"Scheduler: Linear warmup ({warmup_steps} steps) + Cosine decay\n")
 
     def setup_wandb(self, offline: bool = False):
         """Initialize wandb logging."""
@@ -1032,11 +1071,11 @@ Hours to work this week (0-100)? Number only:"""
         # Policy gradient loss: -E[log π(a|s) * A]
         pg_loss = -(new_log_probs * advantages).mean()
 
-        # KL penalty (prevent drift from initial policy)
+        # KL penalty against frozen base model (prevent drift from pretrained weights)
         kl_loss = torch.tensor(0.0, device=self.planner_policy.device)
         if self.config.kl_coef > 0:
-            log_ratio = new_log_probs - old_log_probs
-            kl_loss = (log_ratio ** 2).mean()  # Simplified KL
+            ref_log_probs = self.planner_policy.compute_ref_log_prob_batch(prompts_and_actions)
+            kl_loss = (new_log_probs - ref_log_probs).mean()  # KL(policy || reference)
 
         # Entropy bonus (encourage exploration)
         entropy_loss = -new_log_probs.mean()
@@ -1292,7 +1331,7 @@ async def main():
                        help="Parallel rollouts (auto-set based on GPU if not specified)")
     parser.add_argument("--num-agents", type=int, default=None,
                        help="Number of worker agents (auto-set based on GPU if not specified)")
-    parser.add_argument("--learning-rate", type=float, default=5e-5,
+    parser.add_argument("--learning-rate", type=float, default=1e-6,
                        help="Learning rate")
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed")
