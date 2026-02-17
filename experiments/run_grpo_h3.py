@@ -113,20 +113,21 @@ class GRPOConfig:
 
     # GRPO-specific
     group_size: int = 8           # G: completions per prompt
-    epsilon: float = 0.1         # PPO clip range (tighter to prevent format collapse)
+    epsilon: float = 0.2         # PPO clip range (standard)
     num_groups_per_iter: int = 4  # Number of prompt groups per iteration
-    grpo_beta: float = 0.1      # KL penalty coefficient (higher to anchor to reference)
+    grpo_beta: float = 0.04     # KL penalty coefficient (moderate)
 
     # Training
     num_iterations: int = 100
-    learning_rate: float = 5e-8   # Ultra-conservative to prevent format collapse
-    max_grad_norm: float = 0.05   # Very tight gradient clipping
+    learning_rate: float = 1e-6   # Standard LoRA LR (safe with attention targets)
+    max_grad_norm: float = 1.0    # Standard gradient clipping
     temperature: float = 0.8     # Sampling temperature for diverse completions
+    warmup_steps: int = 5        # LR warmup iterations
 
-    # LoRA - minimal capacity to prevent format destruction
+    # LoRA - attention layers only (MLP targets caused format collapse)
     use_lora: bool = True
-    lora_r: int = 2               # Minimal rank (was 8)
-    lora_alpha: int = 1           # Effective scaling = 0.5 (alpha/r)
+    lora_r: int = 8               # Standard rank
+    lora_alpha: int = 16          # Effective scaling = 2.0 (alpha/r)
     lora_dropout: float = 0.05
 
     # GPU optimization
@@ -310,7 +311,7 @@ class PlannerPolicy:
                 r=self.config.lora_r,
                 lora_alpha=self.config.lora_alpha,
                 lora_dropout=self.config.lora_dropout,
-                target_modules=["gate_proj", "up_proj", "down_proj"],
+                target_modules=["q_proj", "v_proj"],  # Attention only (MLP targets caused format collapse)
                 bias="none",
                 task_type="CAUSAL_LM",
             )
@@ -1168,8 +1169,49 @@ Hours to work this week (0-100)? Number only:"""
             # Free worker engine memory before training (1-GPU mode)
             await self._stop_worker_engine()
 
+            # Snapshot LoRA weights before training (for format-safety rollback)
+            import copy
+            lora_snapshot = copy.deepcopy({
+                k: v.clone() for k, v in self.planner_policy.model.state_dict().items()
+                if 'lora' in k
+            })
+            optimizer_snapshot = copy.deepcopy(self.optimizer.state_dict())
+
             # GRPO training step
             train_metrics = self.grpo_train_step(all_group_rollouts, iteration)
+
+            # Post-training format safety check: sample 4 completions and verify format
+            self.planner_policy.model.eval()
+            post_train_format_ok = 0
+            post_train_total = 4
+            test_system = format_h3_system_prompt(self.baseline_metrics)
+            test_user = format_h3_user_prompt(
+                {"mean_income": 3000.0, "gini": 0.4}, self.baseline_metrics
+            )
+            for _ in range(post_train_total):
+                tax_rates, _, raw = self.planner_policy.sample_action(
+                    test_system, test_user, temperature=0.7
+                )
+                if tax_rates is not None:
+                    post_train_format_ok += 1
+            post_format_rate = post_train_format_ok / post_train_total
+            print(f"  Post-training format check: {post_train_format_ok}/{post_train_total} ({post_format_rate*100:.0f}%)", flush=True)
+
+            # If format collapsed, revert the LoRA update
+            if post_format_rate < 0.5:
+                print(f"  FORMAT COLLAPSE DETECTED! Reverting LoRA weights to pre-training state.", flush=True)
+                current_state = self.planner_policy.model.state_dict()
+                for k, v in lora_snapshot.items():
+                    current_state[k] = v
+                self.planner_policy.model.load_state_dict(current_state)
+                self.optimizer.load_state_dict(optimizer_snapshot)
+                # Halve the learning rate to prevent collapse on next attempt
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = param_group['lr'] / 2
+                print(f"  LR halved to {self.optimizer.param_groups[0]['lr']:.2e}", flush=True)
+                train_metrics['format_reverted'] = True
+            else:
+                train_metrics['format_reverted'] = False
 
             iter_time = time.time() - iter_start
 
