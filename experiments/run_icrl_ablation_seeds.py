@@ -138,6 +138,7 @@ def build_command(
         "--tax-year-length", str(TAX_YEAR_LENGTH),
         "--model", model,
         "--quantization", quantization,
+        "--tensor-parallel", "1",
         "--seed", str(seed),
         "--output", str(output_dir / f"{condition['name']}_seed{seed}.json"),
     ]
