@@ -325,7 +325,7 @@ class PlannerPolicy:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.8,
-        max_new_tokens: int = 512,
+        max_new_tokens: int = 128,  # JSON output is ~55 tokens; reduced from 512 to save GPU memory
     ) -> Tuple[Optional[List[float]], float, str]:
         """
         Sample a single tax policy action and compute log probability.
@@ -352,6 +352,12 @@ class PlannerPolicy:
 
         inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.device)
 
+        # Ensure use_cache=True for generation (gradient_checkpointing_enable sets it False)
+        was_gc = self.model.is_gradient_checkpointing if hasattr(self.model, 'is_gradient_checkpointing') else False
+        if was_gc:
+            self.model.gradient_checkpointing_disable()
+        self.model.config.use_cache = True
+
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -362,6 +368,11 @@ class PlannerPolicy:
                 output_scores=True,
                 pad_token_id=self.tokenizer.pad_token_id,
             )
+
+        # Re-enable gradient checkpointing if it was active
+        if was_gc:
+            self.model.gradient_checkpointing_enable()
+            self.model.config.use_cache = False
 
         generated_ids = outputs.sequences[0][inputs["input_ids"].shape[1]:]
         response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
@@ -1146,10 +1157,26 @@ Hours to work this week (0-100)? Number only:"""
 
             print(f"\nIteration {iteration+1}/{self.config.num_iterations}")
 
+            # GPU memory diagnostics
+            if torch.cuda.is_available():
+                mem_alloc = torch.cuda.memory_allocated() / 1e9
+                mem_reserved = torch.cuda.memory_reserved() / 1e9
+                print(f"  [GPU] Memory: {mem_alloc:.2f}GB allocated, {mem_reserved:.2f}GB reserved", flush=True)
+
+            # Ensure model is in eval mode for rollout collection
+            self.planner_policy.model.eval()
+
+            # Debug: verify LoRA weights haven't changed since last check
+            lora_hash = sum(v.sum().item() for k, v in self.planner_policy.model.state_dict().items() if 'lora' in k)
+            print(f"  [DEBUG] LoRA weight hash before rollouts: {lora_hash:.6f}", flush=True)
+
             # Collect group rollouts
             # Each group: fix one state, sample G policies, run G sims with fused batches
             all_group_rollouts = []
             for grp_idx in range(num_groups):
+                # Clear CUDA cache between groups to prevent OOM-induced garbage
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 group_rollouts = await self.collect_group_rollouts_optimized(
                     group_id=grp_idx,
                 )
@@ -1179,6 +1206,19 @@ Hours to work this week (0-100)? Number only:"""
 
             # GRPO training step
             train_metrics = self.grpo_train_step(all_group_rollouts, iteration)
+
+            # Free training memory before format check
+            if torch.cuda.is_available():
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                mem_alloc = torch.cuda.memory_allocated() / 1e9
+                mem_reserved = torch.cuda.memory_reserved() / 1e9
+                print(f"  [GPU] Post-training memory: {mem_alloc:.2f}GB allocated, {mem_reserved:.2f}GB reserved", flush=True)
+
+            # Debug: compute LoRA weight hash to detect corruption
+            lora_hash = sum(v.sum().item() for k, v in self.planner_policy.model.state_dict().items() if 'lora' in k)
+            print(f"  [DEBUG] LoRA weight hash after training: {lora_hash:.6f}", flush=True)
 
             # Post-training format safety check: sample 4 completions and verify format
             self.planner_policy.model.eval()
