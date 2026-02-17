@@ -45,7 +45,9 @@ import os
 os.environ['VLLM_USE_V1'] = '0'
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 os.environ['TORCHDYNAMO_DISABLE'] = '1'
-if not os.environ.get('HF_TOKEN'):
+# Only enable offline mode on SLURM (compute nodes have no internet)
+# SSH resources like Cynthia/Pikachu have internet access
+if not os.environ.get('HF_TOKEN') and 'SLURM_JOB_ID' in os.environ:
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
 

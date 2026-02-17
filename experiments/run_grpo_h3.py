@@ -31,12 +31,8 @@ os.environ['VLLM_USE_V1'] = '0'
 # CRITICAL: Disable PyTorch compilation to avoid 10+ min hang
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 os.environ['TORCHDYNAMO_DISABLE'] = '1'
-# CRITICAL: Enable offline mode if HF_TOKEN not set (use cached models for gated repos)
-if not os.environ.get('HF_TOKEN'):
-    print("[STARTUP] HF_TOKEN not set - enabling offline mode for cached models", flush=True)
-    os.environ['HF_HUB_OFFLINE'] = '1'
-    os.environ['TRANSFORMERS_OFFLINE'] = '1'
-# CRITICAL: Additional offline settings for SLURM (compute nodes have no internet)
+# Only enable offline mode on SLURM (compute nodes have no internet)
+# SSH resources like Cynthia/Pikachu have internet access and can download models
 if 'SLURM_JOB_ID' in os.environ:
     os.environ['HF_DATASETS_OFFLINE'] = '1'
     os.environ['HF_HUB_OFFLINE'] = '1'
@@ -220,18 +216,35 @@ def compute_reward(final_swf: float, baseline_swf: float, format_success: bool =
 
 
 def parse_tax_rates(response: str) -> Optional[List[float]]:
-    """Parse tax rates from model response."""
+    """Parse tax rates from model response.
+
+    Handles Qwen3 thinking mode by stripping <think>...</think> tags
+    and extracting JSON from anywhere in the response.
+    """
     try:
-        if "{" in response and "}" in response:
-            start = response.index("{")
-            end = response.rindex("}") + 1
-            json_str = response[start:end]
+        # Strip Qwen3 thinking tags if present
+        cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+        # Also handle case where thinking tag is not closed (model ran out of tokens)
+        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL).strip()
+
+        # Try to find JSON in cleaned response
+        text_to_parse = cleaned if cleaned else response
+        if "{" in text_to_parse and "}" in text_to_parse:
+            start = text_to_parse.index("{")
+            end = text_to_parse.rindex("}") + 1
+            json_str = text_to_parse[start:end]
             data = json.loads(json_str)
 
             if "tax_rates" in data:
                 rates = [float(r) for r in data["tax_rates"]]
                 rates = [max(0.0, min(0.99, r)) for r in rates]
                 return rates
+
+        # Fallback: try to extract 7 floats from the response
+        numbers = re.findall(r'0\.\d+', text_to_parse)
+        if len(numbers) >= 7:
+            rates = [max(0.0, min(0.99, float(n))) for n in numbers[:7]]
+            return rates
     except Exception:
         pass
     return None
@@ -307,7 +320,7 @@ class PlannerPolicy:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.8,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = 512,
     ) -> Tuple[Optional[List[float]], float, str]:
         """
         Sample a single tax policy action and compute log probability.
@@ -315,9 +328,15 @@ class PlannerPolicy:
         Returns:
             Tuple of (tax_rates, log_prob, raw_response)
         """
+        # For Qwen3 models: append /no_think to disable thinking mode
+        # This prevents the model from spending all tokens on <think> tags
+        effective_user_prompt = user_prompt
+        if "qwen3" in self.model_name.lower() or "Qwen3" in self.model_name:
+            effective_user_prompt = user_prompt + " /no_think"
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": effective_user_prompt},
         ]
 
         full_prompt = self.tokenizer.apply_chat_template(
@@ -343,6 +362,14 @@ class PlannerPolicy:
         response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
         log_prob = self._compute_log_prob(outputs.scores, generated_ids)
         tax_rates = parse_tax_rates(response)
+
+        # Debug: log first few responses to diagnose format issues
+        if not hasattr(self, '_sample_count'):
+            self._sample_count = 0
+        self._sample_count += 1
+        if self._sample_count <= 3 or (tax_rates is None and self._sample_count <= 10):
+            print(f"  [DEBUG sample {self._sample_count}] raw response: {response[:200]}", flush=True)
+            print(f"  [DEBUG sample {self._sample_count}] parsed: {tax_rates is not None}", flush=True)
 
         return tax_rates, log_prob, response
 
@@ -383,9 +410,14 @@ class PlannerPolicy:
         grad_context = torch.enable_grad() if enable_grad else torch.no_grad()
 
         for system_prompt, user_prompt, tax_rates in prompts_and_actions:
+            # Apply /no_think for Qwen3 models (consistent with sample_action)
+            effective_user_prompt = user_prompt
+            if "qwen3" in self.model_name.lower() or "Qwen3" in self.model_name:
+                effective_user_prompt = user_prompt + " /no_think"
+
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": effective_user_prompt},
             ]
 
             full_prompt = self.tokenizer.apply_chat_template(
