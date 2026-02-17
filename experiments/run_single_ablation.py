@@ -44,8 +44,14 @@ try:
     result = subprocess.run(
         [sys.executable, "-m", "llm_economist.main_async"] + sys.argv[1:],
         cwd=repo_root,
+        capture_output=True,
+        text=True,
     )
     log(f"main_async exited with code {result.returncode}")
+    if result.stdout:
+        log(f"STDOUT (last 2000): {result.stdout[-2000:]}")
+    if result.stderr:
+        log(f"STDERR (last 2000): {result.stderr[-2000:]}")
     sys.exit(result.returncode)
 
 except Exception as e:
