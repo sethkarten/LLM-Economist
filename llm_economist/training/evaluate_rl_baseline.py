@@ -136,6 +136,7 @@ async def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
         tensor_parallel_size=1,
         max_model_len=4096,
         text_only_mode=model_config.text_only_mode,
+        gpu_memory_utilization=0.85,  # Lower to avoid OOM during CUDA graph capture
     )
 
     results = {
