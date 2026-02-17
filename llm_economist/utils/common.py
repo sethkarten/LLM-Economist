@@ -216,11 +216,15 @@ def saez_optimal_tax_rates(skills, brackets, elasticities):
     tax_rates = []
     for i in range(n_brackets):
         bracket_start, bracket_end = brackets[i], brackets[i+1]
-        # choose z at midpoint (or near start for top bracket)
+        # choose z at midpoint; for top bracket use mean of agents in that bracket
         if i < n_brackets - 1:
             z = 0.5 * (bracket_start + bracket_end)
         else:
-            z = bracket_start + 0.1 * (bracket_end - bracket_start)
+            incomes_in_bracket = incomes[incomes >= bracket_start]
+            if incomes_in_bracket.size > 0:
+                z = incomes_in_bracket.mean()
+            else:
+                z = bracket_start * 1.5  # fallback if no agents in bracket
         
         F_z = np.mean(incomes <= z)
         f_z = kde(z)[0]
