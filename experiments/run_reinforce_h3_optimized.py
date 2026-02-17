@@ -219,7 +219,7 @@ def compute_reward(final_swf: float, baseline_swf: float, format_success: bool =
     if format_success:
         format_bonus = 0.1  # +0.1 for correct format
     else:
-        format_bonus = -0.2  # -0.2 penalty for wrong format (stronger to encourage learning)
+        format_bonus = -5.0  # Strong penalty to dominate advantage signal and prevent format collapse
 
     return scaled_reward + format_bonus
 
@@ -286,7 +286,7 @@ class PlannerPolicy:
                 r=self.config.lora_r,
                 lora_alpha=self.config.lora_alpha,
                 lora_dropout=self.config.lora_dropout,
-                target_modules=["q_proj", "v_proj"],
+                target_modules=["gate_proj", "up_proj", "down_proj"],
                 bias="none",
                 task_type="CAUSAL_LM",
             )
@@ -1051,8 +1051,18 @@ Hours to work this week (0-100)? Number only:"""
 
         # Extract data
         rollout_data_list = [r[0] for r in rollouts]
-        rewards = torch.tensor([r[1] for r in rollouts], dtype=torch.float32, device=self.planner_policy.device)
-        old_log_probs = torch.tensor([r[2] for r in rollouts], dtype=torch.float32, device=self.planner_policy.device)
+
+        # FIX 1: Filter to only format-successful rollouts
+        # Training on malformed rollouts violates policy gradient: the "action" is fabricated
+        # (US federal rates substituted), not the model's actual output.
+        valid_rollouts = [r for r in rollout_data_list if r.get("format_success", True)]
+        if len(valid_rollouts) < 2:
+            print("  Skipping training step: too few valid rollouts")
+            return {"skipped": True, "loss/total": 0.0, "loss/pg": 0.0, "loss/kl": 0.0,
+                    "loss/entropy": 0.0, "advantage/mean": 0.0, "advantage/std": 0.0,
+                    "lr": self.scheduler.get_last_lr()[0]}
+
+        rewards = torch.tensor([r["reward"] for r in valid_rollouts], dtype=torch.float32, device=self.planner_policy.device)
 
         # Compute advantages using group-relative baseline (GRPO-style)
         baseline = rewards.mean()
@@ -1066,7 +1076,7 @@ Hours to work this week (0-100)? Number only:"""
         # Recompute log probs with gradients (BATCHED for efficiency)
         prompts_and_actions = [
             (r["system_prompt"], r["user_prompt"], r["action"]["tax_rates"])
-            for r in rollout_data_list
+            for r in valid_rollouts
         ]
         new_log_probs = self.planner_policy.compute_log_prob_batch(prompts_and_actions)
 
