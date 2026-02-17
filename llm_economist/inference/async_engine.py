@@ -80,7 +80,7 @@ class ScalableInferenceEngine:
         model_name: str,
         tensor_parallel_size: int = 1,
         gpu_memory_utilization: float = 0.95,
-        max_model_len: int = 8192,
+        max_model_len: int = 16384,
         quantization: Optional[str] = "awq",  # awq, gptq, fp8, bitsandbytes, None
         kv_cache_dtype: str = "fp8",
         enable_prefix_caching: bool = True,
