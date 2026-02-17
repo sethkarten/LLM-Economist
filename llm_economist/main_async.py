@@ -87,6 +87,9 @@ class AsyncLLMEconomist:
         seed: int = 42,
         use_wandb: bool = False,
         debug: bool = False,
+        disable_exploration: bool = False,
+        disable_exploitation: bool = False,
+        swf_weighting: str = "rawlsian",
     ):
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
@@ -98,6 +101,9 @@ class AsyncLLMEconomist:
         self.seed = seed
         self.use_wandb = use_wandb
         self.debug = debug
+        self.disable_exploration = disable_exploration
+        self.disable_exploitation = disable_exploitation
+        self.swf_weighting = swf_weighting
 
         # Set seeds
         np.random.seed(seed)
@@ -234,14 +240,27 @@ Respond with JSON: {{"labor_hours": <number>, "reasoning": "<brief explanation>"
 
     def _build_planner_prompt(self, timestep: int, worker_stats: List[Dict]) -> tuple:
         """Build system and user prompts for the tax planner."""
-        system_prompt = """You are a tax policy planner trying to maximize social welfare.
-Social welfare = sum of (utility / pre_tax_income) across all agents.
+        if self.swf_weighting == 'utilitarian':
+            swf_formula = "Social welfare = sum of utilities across all agents."
+        else:
+            swf_formula = "Social welfare = sum of (utility / pre_tax_income) across all agents."
+
+        exploration_cue = ""
+        if not self.disable_exploration:
+            exploration_cue = "\n4. Explore diverse tax rates to find the best ones"
+
+        exploitation_cue = ""
+        if not self.disable_exploitation:
+            exploitation_cue = "\n5. Use historically successful rates to guide decisions"
+
+        system_prompt = f"""You are a tax policy planner trying to maximize social welfare.
+{swf_formula}
 
 You can adjust marginal tax rates for each bracket.
 Your goal is to find tax rates that:
 1. Raise sufficient revenue for government services
 2. Redistribute to improve overall welfare
-3. Don't discourage work too much
+3. Don't discourage work too much{exploration_cue}{exploitation_cue}
 """
 
         # Summarize worker statistics
@@ -452,9 +471,12 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
             cost = c * (agent.labor ** delta)
             agent.utility = agent.post_tax_income - cost
 
-            # SWF component: utility / pre_tax_income (weighted by income)
-            if agent.income > 0:
-                swf += agent.utility / agent.income
+            if self.swf_weighting == 'utilitarian':
+                swf += agent.utility
+            else:
+                # rawlsian: weight by inverse pre-tax income (1/z)
+                if agent.income > 0:
+                    swf += agent.utility / agent.income
 
         self.state.swf = swf
 
@@ -567,6 +589,9 @@ async def main_async(args):
         seed=args.seed,
         use_wandb=args.wandb,
         debug=args.debug,
+        disable_exploration=args.disable_exploration,
+        disable_exploitation=args.disable_exploitation,
+        swf_weighting=args.swf_weighting,
     )
 
     await simulator.initialize()
@@ -617,6 +642,15 @@ def create_argument_parser():
                        help='Enable debug logging')
     parser.add_argument('--wandb', action='store_true',
                        help='Enable wandb logging')
+
+    # ICRL ablation flags
+    parser.add_argument('--disable-exploration', action='store_true',
+                       help='Disable exploration prompt cues in ICRL (ablation)')
+    parser.add_argument('--disable-exploitation', action='store_true',
+                       help='Disable exploitation prompt cues in ICRL (ablation)')
+    parser.add_argument('--swf-weighting', default='rawlsian',
+                       choices=['rawlsian', 'utilitarian'],
+                       help='Social welfare function weighting scheme')
 
     # Utility
     parser.add_argument('--estimate-time', action='store_true',

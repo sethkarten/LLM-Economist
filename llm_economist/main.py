@@ -104,11 +104,15 @@ def run_simulation(args):
         if args.num_agents > 20:
             planner_history = args.history_len//(args.num_agents) * 20
         
-        tax_planner = TaxPlanner(args.llm, args.port, 'Joe', 
-                                 history_len=planner_history, prompt_algo=args.prompt_algo, 
-                                 max_timesteps=args.max_timesteps, num_agents=args.num_agents, args=args)
+        tax_planner = TaxPlanner(args.llm, args.port, 'Joe',
+                                 history_len=planner_history, prompt_algo=args.prompt_algo,
+                                 max_timesteps=args.max_timesteps, num_agents=args.num_agents, args=args,
+                                 disable_exploration=args.disable_exploration,
+                                 disable_exploitation=args.disable_exploitation,
+                                 swf_weighting=args.swf_weighting)
     elif args.planner_type in ['US_FED', 'SAEZ', 'SAEZ_FLAT', 'SAEZ_THREE', 'UNIFORM']:
-        tax_planner = FixedTaxPlanner('Joe', args.planner_type, history_len=args.history_len, skills=skills, args=args)
+        tax_planner = FixedTaxPlanner('Joe', args.planner_type, history_len=args.history_len, skills=skills, args=args,
+                                      swf_weighting=args.swf_weighting)
     tax_rates = tax_planner.tax_rates
     
     # Initialize wandb logging
@@ -319,7 +323,10 @@ def create_argument_parser():
                     help='Elasticity values for tax brackets')
     parser.add_argument('--wandb', action='store_true', help='Enable wandb logging')
     parser.add_argument('--timeout', type=int, default=30, help='Timeout for LLM calls')
-    
+    parser.add_argument('--disable-exploration', action='store_true', help='Disable exploration prompt cues in ICRL (ablation)')
+    parser.add_argument('--disable-exploitation', action='store_true', help='Disable exploitation prompt cues in ICRL (ablation)')
+    parser.add_argument('--swf-weighting', default='rawlsian', choices=['rawlsian', 'utilitarian'], help='Social welfare function weighting scheme')
+
     return parser
 
 
