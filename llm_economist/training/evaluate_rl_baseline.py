@@ -40,6 +40,7 @@ class EvalConfig:
     output_path: str = "results/rl_baseline_llm_eval.json"
     device: str = "cuda"
     seed: int = 42
+    tensor_parallel_size: int = 1
 
 
 class RLPlannerWrapper:
@@ -133,7 +134,7 @@ async def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
     engine = ScalableInferenceEngine(
         model_name=model_config.hf_name,
         quantization=quant_str,
-        tensor_parallel_size=1,
+        tensor_parallel_size=config.tensor_parallel_size,
         max_model_len=4096,
         text_only_mode=model_config.text_only_mode,
         gpu_memory_utilization=0.85,  # Lower to avoid OOM during CUDA graph capture
@@ -391,6 +392,8 @@ def main():
     parser.add_argument("--output", "-o", type=str, required=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--tensor-parallel", type=int, default=1,
+                       help="Number of GPUs for tensor parallelism (needed for large models like OLMo 32B)")
 
     args = parser.parse_args()
 
@@ -403,6 +406,7 @@ def main():
         output_path=args.output,
         device=args.device,
         seed=args.seed,
+        tensor_parallel_size=args.tensor_parallel,
     )
 
     asyncio.run(run_evaluation(config))
