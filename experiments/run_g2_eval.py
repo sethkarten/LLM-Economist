@@ -20,15 +20,25 @@ import os
 
 def main():
     # Pass all arguments through to the module
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cmd = [
         sys.executable, "-u", "-m",
         "llm_economist.training.evaluate_rl_baseline",
     ] + sys.argv[1:]
 
-    print(f"Running: {' '.join(cmd)}")
-    print(f"CWD: {os.getcwd()}")
+    print(f"Running: {' '.join(cmd)}", flush=True)
+    print(f"CWD: {os.getcwd()}", flush=True)
+    print(f"Repo root: {repo_root}", flush=True)
+    print(f"Python: {sys.executable}", flush=True)
+    print(f"Args: {sys.argv[1:]}", flush=True)
 
-    result = subprocess.run(cmd, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    result = subprocess.run(
+        cmd,
+        cwd=repo_root,
+        stdout=sys.stdout,
+        stderr=sys.stdout,  # Redirect stderr to stdout so GPU manager captures it
+    )
+    print(f"Exit code: {result.returncode}", flush=True)
     sys.exit(result.returncode)
 
 
