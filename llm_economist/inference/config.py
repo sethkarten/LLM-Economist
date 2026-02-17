@@ -72,18 +72,18 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
 
     # OLMo 3 Models
     "olmo3-32b-instruct": ModelConfig(
-        name="OLMo-3-32B-Instruct",
-        hf_name="allenai/OLMo-3-1B-32B-1125-Instruct",
+        name="OLMo-2-0325-32B-Instruct",
+        hf_name="allenai/OLMo-2-0325-32B-Instruct",
         total_params=32.0,
         active_params=32.0,
         architecture="dense",
         context_length=32768,
-        recommended_quantization=QuantizationType.AWQ,
+        recommended_quantization=QuantizationType.FP8,
         vram_fp16=64.0,
         vram_int4=16.0,
         supports_thinking=False,
         chat_template="olmo",
-        notes="Fully open model, Apache 2.0"
+        notes="Fully open model, Apache 2.0. No AWQ available, use FP8."
     ),
     "olmo3-32b-think": ModelConfig(
         name="OLMo-3-32B-Think",
