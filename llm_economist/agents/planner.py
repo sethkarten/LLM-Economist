@@ -6,23 +6,43 @@ from collections import defaultdict
 from ..utils.bracket import get_bracket_prompt, get_default_rates, get_brackets, get_num_brackets
 
 class TaxPlanner(LLMAgent):
-    def __init__(self, llm: str, port: int, name: str, prompt_algo: str= 'io', history_len: int=10, timeout: int=10, max_timesteps: int=500, num_agents: int=3, args=None) -> None:
+    def __init__(self, llm: str, port: int, name: str, prompt_algo: str= 'io', history_len: int=10, timeout: int=10, max_timesteps: int=500, num_agents: int=3, args=None, disable_exploration: bool=False, disable_exploitation: bool=False, swf_weighting: str='rawlsian') -> None:
         super().__init__(llm, port, name, prompt_algo, history_len, timeout, args=args)
         self.logger = logging.getLogger('main')
         self.delta = 20
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
+        self.disable_exploration = disable_exploration
+        self.disable_exploitation = disable_exploitation
+        self.swf_weighting = swf_weighting
         self.bracket_prompt, self.format_prompt = get_bracket_prompt(self.bracket_setting)
+
+        # Build system prompt with conditional exploration/exploitation cues
+        exploration_cue = ''
+        if not self.disable_exploration:
+            exploration_cue = 'Use the historical data to influence your answer in order to maximize SWF, while balancing exploration and exploitation by choosing varying rates of TAX. \
+            Explore tax rates that may create suboptimal SWF to find the best ones. '
+
+        exploitation_cue = ''
+        if not self.disable_exploitation and self.disable_exploration:
+            # When only exploitation is active (exploration disabled), provide a simpler historical cue
+            exploitation_cue = 'Use the historical data to influence your answer in order to maximize SWF. '
+
+        if self.swf_weighting == 'utilitarian':
+            swf_description = 'which is the sum of all agent utilities. '
+        else:
+            swf_description = 'which is the average of all agent utilities weighted by their inverse pre-tax income. '
+
         self.system_prompt = 'You are an expert tax planner. \
-            You set the marginal tax rates in order to optimize social welfare, \
-            which is the average of all agent utilities weighted by their inverse pre-tax income. \
-            Collected taxes will be redistributed evenly back to the citizens. \
+            You set the marginal tax rates in order to optimize social welfare, '\
+            f'{swf_description}'\
+            'Collected taxes will be redistributed evenly back to the citizens. \
             You may set the marginal tax rate in order to promote equity. '\
             f'{self.bracket_prompt}' \
-            'Each tax rate can changed DELTA=[-20, -10, 0, 10, 20] percent where tax rates must be between 0 and 100 percent. \
-            Use the historical data to influence your answer in order to maximize SWF, while balancing exploration and exploitation by choosing varying rates of TAX. \
-            Explore tax rates that may create suboptimal SWF to find the best ones. \
-            Reply with all answers in '\
+            'Each tax rate can changed DELTA=[-20, -10, 0, 10, 20] percent where tax rates must be between 0 and 100 percent. '\
+            f'{exploration_cue}'\
+            f'{exploitation_cue}'\
+            'Reply with all answers in '\
             'JSON like: {\"DELTA\": '+f'{self.format_prompt}'+'} and replace \"X\" with the percentage that the tax rates will change.'
         self.init_message_history()
         self.swf = 0.
@@ -126,14 +146,12 @@ class TaxPlanner(LLMAgent):
 
     def get_social_welfare(self, z: list[float], u: list[float]) -> float:
         assert len(z) == len(u)
-        # for i in range(len(z)):
-            # if z[i] == 0:
-            #     raise ValueError(f"Income is 0 for agent {i}")
-        swf = sum([u[i]/max(z[i],1) for i in range(len(u))])
-        # if swf > self.num_agents:
-        #     swf = self.num_agents
+        if self.swf_weighting == 'utilitarian':
+            swf = sum(u)
+        else:
+            # rawlsian: weight by inverse pre-tax income (1/z)
+            swf = sum([u[i]/max(z[i],1) for i in range(len(u))])
         return swf
-        # return np.dot(u, 1./np.array(z))
     
     def get_income_tax(self, tax_rates: list[float], z: float) -> float:
         tax_indv = 0
@@ -235,15 +253,21 @@ class TaxPlanner(LLMAgent):
             index_best = np.unravel_index(np.argmax(self.tax_swf), self.tax_swf.shape)
             self.best_tax = [10 * x for x in index_best]
 
-            self.message_history[timestep]['historical'] += f'social welfare: swf = u_1/z_1 + ... + u_N/z_N = {self.swf}\n'
+            if self.swf_weighting == 'utilitarian':
+                self.message_history[timestep]['historical'] += f'social welfare: swf = u_1 + ... + u_N = {self.swf}\n'
+            else:
+                self.message_history[timestep]['historical'] += f'social welfare: swf = u_1/z_1 + ... + u_N/z_N = {self.swf}\n'
             self.message_history[timestep]['metric'] = self.swf
 
-            self.message_history[timestep]['user_prompt'] += 'Use the historical data to influence your answer in order to maximize SWF, while balancing exploration and exploitation by choosing varying rates of TAX. '
+            if not self.disable_exploration:
+                self.message_history[timestep]['user_prompt'] += 'Use the historical data to influence your answer in order to maximize SWF, while balancing exploration and exploitation by choosing varying rates of TAX. '
             avg_swf = np.average(self.swf_history[-self.history_len:])
             avg_tax = np.round(np.average(self.tax_history[-self.history_len:], 0), -1)
             self.logger.info(f'The best marginal tax rate historically was TAX={avg_tax} corresponding to SWF={avg_swf}. ')
-            self.message_history[timestep]['user_prompt'] += f'The best marginal tax rate historically was TAX={avg_tax} corresponding to SWF={avg_swf}. '
-            self.message_history[timestep]['user_prompt'] += 'Try different rates of TAX before picking the one that corresponds to the highest SWF. '
+            if not self.disable_exploitation:
+                self.message_history[timestep]['user_prompt'] += f'The best marginal tax rate historically was TAX={avg_tax} corresponding to SWF={avg_swf}. '
+            if not self.disable_exploration:
+                self.message_history[timestep]['user_prompt'] += 'Try different rates of TAX before picking the one that corresponds to the highest SWF. '
             self.message_history[timestep]['user_prompt'] += '\nTAX = TAX + DELTA\n'
             self.logger.info(f'[BEST] TAX={self.best_tax} SWF={self.best_swf}')
             # rand1_tax, rand2_tax = self.get_random(), self.get_random()
@@ -317,8 +341,8 @@ class TaxPlanner(LLMAgent):
     
 
 class FixedTaxPlanner(TaxPlanner):
-    def __init__(self, name: str, tax_type: str='US_FED', history_len: int=10, timeout: int=10, args=None, skills: list=None) -> None:
-        super().__init__('None', port=0, name=name, history_len=history_len, timeout=timeout, args=args)
+    def __init__(self, name: str, tax_type: str='US_FED', history_len: int=10, timeout: int=10, args=None, skills: list=None, swf_weighting: str='rawlsian') -> None:
+        super().__init__('None', port=0, name=name, history_len=history_len, timeout=timeout, args=args, swf_weighting=swf_weighting)
 
         self.swf = 0.
         brackets = get_brackets(self.bracket_setting)
