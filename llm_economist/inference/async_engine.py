@@ -193,10 +193,12 @@ class ScalableInferenceEngine:
             if hf_token:
                 print(f"[DEBUG] HF_TOKEN is set (length={len(hf_token)}, starts with {hf_token[:10]}...)", flush=True)
             else:
-                # No token - force offline mode to use cached models
-                print("[DEBUG] HF_TOKEN not set - enabling offline mode for cached models", flush=True)
-                os.environ['HF_HUB_OFFLINE'] = '1'
-                os.environ['TRANSFORMERS_OFFLINE'] = '1'
+                # No token - allow online downloads for public models
+                # Only force offline if explicitly requested via environment
+                if os.environ.get('HF_HUB_OFFLINE', '') == '1':
+                    print("[DEBUG] HF_TOKEN not set, HF_HUB_OFFLINE=1 (pre-set)", flush=True)
+                else:
+                    print("[DEBUG] HF_TOKEN not set - allowing online downloads for public models", flush=True)
 
             engine_args = AsyncEngineArgs(**self._config)
             self._engine = AsyncLLMEngine.from_engine_args(engine_args)
