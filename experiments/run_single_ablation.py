@@ -23,15 +23,17 @@ try:
     log(f"Args: {sys.argv[1:]}")
     log(f"CWD: {os.getcwd()}")
 
-    # Install the package if needed
+    # Install the package if needed (use uv if available, fallback to pip)
     log("Installing package...")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", repo_root],
-        capture_output=True,
-        text=True,
-    )
+    uv_path = os.path.expanduser("~/.local/bin/uv")
+    if os.path.exists(uv_path):
+        install_cmd = [uv_path, "pip", "install", "-e", repo_root]
+    else:
+        install_cmd = [sys.executable, "-m", "pip", "install", "-e", repo_root]
+    log(f"Install cmd: {' '.join(install_cmd)}")
+    result = subprocess.run(install_cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        log(f"pip install FAILED (exit {result.returncode})")
+        log(f"Install FAILED (exit {result.returncode})")
         log(f"STDOUT: {result.stdout[-1000:]}")
         log(f"STDERR: {result.stderr[-1000:]}")
         sys.exit(1)
