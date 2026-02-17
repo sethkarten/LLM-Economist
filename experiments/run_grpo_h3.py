@@ -119,14 +119,14 @@ class GRPOConfig:
 
     # Training
     num_iterations: int = 100
-    learning_rate: float = 1e-7   # Ultra-conservative to prevent format collapse
-    max_grad_norm: float = 0.1    # Tight gradient clipping
+    learning_rate: float = 5e-8   # Ultra-conservative to prevent format collapse
+    max_grad_norm: float = 0.05   # Very tight gradient clipping
     temperature: float = 0.8     # Sampling temperature for diverse completions
 
-    # LoRA
+    # LoRA - minimal capacity to prevent format destruction
     use_lora: bool = True
-    lora_r: int = 8
-    lora_alpha: int = 4           # Effective scaling = alpha/r = 0.5 (was 1.0)
+    lora_r: int = 2               # Minimal rank (was 8)
+    lora_alpha: int = 1           # Effective scaling = 0.5 (alpha/r)
     lora_dropout: float = 0.05
 
     # GPU optimization
@@ -367,12 +367,19 @@ class PlannerPolicy:
         log_prob = self._compute_log_prob(outputs.scores, generated_ids)
         tax_rates = parse_tax_rates(response)
 
-        # Debug: log first few responses to diagnose format issues
+        # Debug: always log first sample of each group AND any format failures
         if not hasattr(self, '_sample_count'):
             self._sample_count = 0
+            self._format_fail_count = 0
         self._sample_count += 1
-        if self._sample_count <= 3 or (tax_rates is None and self._sample_count <= 10):
-            print(f"  [DEBUG sample {self._sample_count}] raw response: {response[:200]}", flush=True)
+        # Log: first 3 samples, first format failure per batch of 32, and every 32nd sample
+        should_log = (self._sample_count <= 3 or
+                      self._sample_count % 32 == 1 or
+                      (tax_rates is None and self._format_fail_count < 5))
+        if tax_rates is None:
+            self._format_fail_count += 1
+        if should_log:
+            print(f"  [DEBUG sample {self._sample_count}] raw: {response[:300]}", flush=True)
             print(f"  [DEBUG sample {self._sample_count}] parsed: {tax_rates is not None}", flush=True)
 
         return tax_rates, log_prob, response
