@@ -749,6 +749,36 @@ GRPO H3 Training
         if not self._use_2gpu_mode:
             print("[1-GPU] Ready for next rollout collection", flush=True)
 
+    async def _ensure_worker_engine_alive(self):
+        """Check if worker engine (vLLM server) is alive; restart if needed."""
+        if not self._use_2gpu_mode:
+            return  # 1-GPU mode doesn't need server health check
+
+        from llm_economist.inference.vllm_server_engine import VLLMServerEngine
+        if not isinstance(self.worker_engine, VLLMServerEngine):
+            return
+
+        # Quick health check
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"http://localhost:{self.worker_engine.port}/health",
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status == 200:
+                        return  # Server is healthy
+        except Exception:
+            pass
+
+        # Server is down - restart it
+        print("[WORKER ENGINE] vLLM server appears dead, restarting...", flush=True)
+        self.worker_engine.stop()
+        await asyncio.sleep(2)
+        self.worker_engine._initialized = False
+        await self.worker_engine.start(timeout=120)
+        print("[WORKER ENGINE] vLLM server restarted successfully", flush=True)
+
     # =========================================================================
     # BASELINE COMPUTATION
     # =========================================================================
@@ -1166,6 +1196,9 @@ Hours to work this week (0-100)? Number only:"""
             # Ensure model is in eval mode for rollout collection
             self.planner_policy.model.eval()
 
+            # Ensure vLLM worker engine is alive (restart if crashed)
+            await self._ensure_worker_engine_alive()
+
             # Debug: verify LoRA weights haven't changed since last check
             lora_hash = sum(v.sum().item() for k, v in self.planner_policy.model.state_dict().items() if 'lora' in k)
             print(f"  [DEBUG] LoRA weight hash before rollouts: {lora_hash:.6f}", flush=True)
@@ -1473,11 +1506,11 @@ async def main():
                         help="Number of completions per group (G)")
     parser.add_argument("--num-agents", type=int, default=None,
                         help="Number of worker agents")
-    parser.add_argument("--learning-rate", type=float, default=5e-7,
+    parser.add_argument("--learning-rate", type=float, default=1e-6,
                         help="Learning rate")
     parser.add_argument("--epsilon", type=float, default=0.2,
                         help="PPO clip range")
-    parser.add_argument("--grpo-beta", type=float, default=0.05,
+    parser.add_argument("--grpo-beta", type=float, default=0.04,
                         help="KL penalty coefficient (reverse KL)")
     parser.add_argument("--temperature", type=float, default=0.8,
                         help="Sampling temperature for planner completions")
