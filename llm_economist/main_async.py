@@ -90,6 +90,7 @@ class AsyncLLMEconomist:
         disable_exploration: bool = False,
         disable_exploitation: bool = False,
         swf_weighting: str = "rawlsian",
+        history_len: int = 50,
     ):
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
@@ -104,6 +105,7 @@ class AsyncLLMEconomist:
         self.disable_exploration = disable_exploration
         self.disable_exploitation = disable_exploitation
         self.swf_weighting = swf_weighting
+        self.history_len = history_len
 
         # Set seeds
         np.random.seed(seed)
@@ -125,6 +127,9 @@ class AsyncLLMEconomist:
 
         # Logging
         self.metrics_history: List[Dict] = []
+
+        # ICRL planner history for in-context reinforcement learning
+        self.planner_history: List[Dict] = []
 
     async def initialize(self):
         """Initialize the simulation."""
@@ -267,7 +272,56 @@ Your goal is to find tax rates that:
         incomes = [s['income'] for s in worker_stats]
         utilities = [s['utility'] for s in worker_stats]
 
-        user_prompt = f"""Timestep {timestep}:
+        # Build historical context for ICRL
+        history_text = ""
+        if self.planner_history:
+            # Last K timesteps of history
+            K = min(self.history_len, len(self.planner_history))
+            recent = self.planner_history[-K:]
+            history_text += "Historical data:\n"
+            for entry in recent:
+                rates_str = [f"{r*100:.1f}%" for r in entry['tax_rates']]
+                if self.swf_weighting == 'utilitarian':
+                    swf_label = f"swf = u_1 + ... + u_N = {entry['swf']:.4f}"
+                else:
+                    swf_label = f"swf = u_1/z_1 + ... + u_N/z_N = {entry['swf']:.4f}"
+                history_text += (
+                    f"Timestep {entry['timestep']}: "
+                    f"tax_rates={rates_str}, "
+                    f"social welfare: {swf_label}, "
+                    f"total_tax=${entry['total_tax']:.2f}, "
+                    f"mean_income=${entry['mean_income']:.2f}, "
+                    f"mean_utility={entry['mean_utility']:.2f}, "
+                    f"gini={entry['gini']:.3f}\n"
+                )
+
+            # Top-5 best timesteps by SWF
+            sorted_by_swf = sorted(self.planner_history, key=lambda x: x['swf'], reverse=True)
+            top_n = min(5, len(sorted_by_swf))
+            history_text += f"\nBest {top_n} timesteps:\n"
+            for entry in sorted_by_swf[:top_n]:
+                rates_str = [f"{r*100:.1f}%" for r in entry['tax_rates']]
+                history_text += (
+                    f"Timestep {entry['timestep']}: "
+                    f"tax_rates={rates_str}, "
+                    f"SWF={entry['swf']:.4f}\n"
+                )
+            history_text += "\n"
+
+        # Exploration / exploitation cues (gated by flags)
+        cue_text = ""
+        if not self.disable_exploration and self.planner_history:
+            cue_text += "Use the historical data to influence your answer in order to maximize SWF, while balancing exploration and exploitation by choosing varying rates of TAX. "
+            cue_text += "Try different rates of TAX before picking the one that corresponds to the highest SWF. "
+        if not self.disable_exploitation and self.planner_history:
+            # Compute best average tax rates from recent history
+            K = min(self.history_len, len(self.planner_history))
+            recent = self.planner_history[-K:]
+            best_entry = max(recent, key=lambda x: x['swf'])
+            best_rates = [f"{r*100:.1f}%" for r in best_entry['tax_rates']]
+            cue_text += f"The best marginal tax rate historically was TAX={best_rates} corresponding to SWF={best_entry['swf']:.4f}. "
+
+        user_prompt = f"""{history_text}Timestep {timestep}:
 Current tax rates: {[f"{r*100:.1f}%" for r in self.state.tax_rates]}
 Total tax collected: ${self.state.total_tax_collected:.2f}
 Current SWF: {self.state.swf:.4f}
@@ -278,6 +332,7 @@ Worker statistics (N={len(worker_stats)}):
 - Mean utility: {np.mean(utilities):.2f}
 - Income Gini: {self._calculate_gini(incomes):.3f}
 
+{cue_text}
 Propose new tax rates.
 Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanation>"}}
 """
@@ -327,6 +382,17 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         step_time = time.time() - start_time
         metrics = self._collect_metrics(timestep, step_time)
         self.metrics_history.append(metrics)
+
+        # Step 6: Accumulate planner history for ICRL context
+        self.planner_history.append({
+            'timestep': timestep,
+            'tax_rates': self.state.tax_rates.copy(),
+            'swf': self.state.swf,
+            'total_tax': self.state.total_tax_collected,
+            'mean_income': metrics['mean_income'],
+            'mean_utility': metrics['mean_utility'],
+            'gini': metrics['gini'],
+        })
 
         if self.debug or timestep % 100 == 0:
             logger.info(f"Step {timestep}: SWF={metrics['swf']:.4f}, "
@@ -518,6 +584,9 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
                     'tax_year_length': self.tax_year_length,
                     'batch_size': self.batch_size,
                     'seed': self.seed,
+                    'history_len': self.history_len,
+                    'disable_exploration': self.disable_exploration,
+                    'disable_exploitation': self.disable_exploitation,
                 },
                 tags=['icrl', 'in-context', self.scenario, f'agents_{self.num_agents}', f'seed_{self.seed}'],
                 notes=f"""
@@ -553,6 +622,9 @@ ICRL (In-Context RL) Simulation
                 'model_name': self.model_name,
                 'scenario': self.scenario,
                 'seed': self.seed,
+                'history_len': self.history_len,
+                'disable_exploration': self.disable_exploration,
+                'disable_exploitation': self.disable_exploitation,
             },
             'final_state': {
                 'swf': self.state.swf,
@@ -592,6 +664,7 @@ async def main_async(args):
         disable_exploration=args.disable_exploration,
         disable_exploitation=args.disable_exploitation,
         swf_weighting=args.swf_weighting,
+        history_len=args.history_len,
     )
 
     await simulator.initialize()
@@ -644,6 +717,8 @@ def create_argument_parser():
                        help='Enable wandb logging')
 
     # ICRL ablation flags
+    parser.add_argument('--history-len', type=int, default=50,
+                       help='Number of past timesteps to include in planner ICRL context (default: 50)')
     parser.add_argument('--disable-exploration', action='store_true',
                        help='Disable exploration prompt cues in ICRL (ablation)')
     parser.add_argument('--disable-exploitation', action='store_true',

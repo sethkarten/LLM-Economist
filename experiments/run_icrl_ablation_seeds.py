@@ -101,14 +101,11 @@ CONDITIONS = [
 # Simulation defaults
 NUM_AGENTS = 100
 MAX_TIMESTEPS = 2000
-TWO_TIMESCALE = 25
+TAX_YEAR_LENGTH = 25
 SCENARIO = "bounded"
-BRACKET_SETTING = "US_FED"
-PROMPT_ALGO = "io"
 DEFAULT_SEEDS = [0, 1, 2]
-DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
-DEFAULT_SERVICE = "vllm"
-DEFAULT_PORT = 8009
+DEFAULT_MODEL = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
+DEFAULT_QUANTIZATION = "awq"
 
 RESULTS_ROOT = PROJECT_ROOT / "results" / "icrl_ablation"
 
@@ -126,30 +123,23 @@ def build_command(
     condition: Dict,
     seed: int,
     model: str,
-    service: str,
-    port: int,
+    quantization: str,
     wandb: bool,
 ) -> List[str]:
     """Build the subprocess command for a single run."""
     output_dir = get_output_dir(condition["name"], seed)
 
     cmd = [
-        sys.executable, "-m", "llm_economist.main",
+        sys.executable, "-m", "llm_economist.main_async",
         "--scenario", SCENARIO,
         "--num-agents", str(NUM_AGENTS),
         "--max-timesteps", str(MAX_TIMESTEPS),
         "--history-len", str(condition["K"]),
-        "--two-timescale", str(TWO_TIMESCALE),
-        "--bracket-setting", BRACKET_SETTING,
-        "--prompt-algo", PROMPT_ALGO,
-        "--worker-type", "LLM",
-        "--planner-type", "LLM",
-        "--llm", model,
-        "--service", service,
-        "--port", str(port),
+        "--tax-year-length", str(TAX_YEAR_LENGTH),
+        "--model", model,
+        "--quantization", quantization,
         "--seed", str(seed),
-        "--log-dir", str(output_dir),
-        "--name", f"{condition['name']}_seed{seed}",
+        "--output", str(output_dir / f"{condition['name']}_seed{seed}.json"),
     ]
 
     if condition["disable_exploration"]:
@@ -163,25 +153,44 @@ def build_command(
 
 
 def check_completed(condition_name: str, seed: int) -> bool:
-    """Check whether a run already completed by looking for its log file."""
+    """Check whether a run already completed by looking for its output file."""
     output_dir = get_output_dir(condition_name, seed)
+    # Check for JSON output (async path)
+    json_file = output_dir / f"{condition_name}_seed{seed}.json"
+    if json_file.exists():
+        try:
+            data = json.loads(json_file.read_text())
+            return 'metrics_history' in data and len(data['metrics_history']) > 0
+        except Exception:
+            pass
+    # Also check legacy log file (sync path)
     log_file = output_dir / f"{condition_name}_seed{seed}.log"
-    if not log_file.exists():
-        return False
-    # Check if the log contains the completion marker
-    try:
-        text = log_file.read_text()
-        return "Simulation completed successfully" in text
-    except Exception:
-        return False
+    if log_file.exists():
+        try:
+            text = log_file.read_text()
+            return "Simulation completed successfully" in text
+        except Exception:
+            pass
+    return False
 
 
 def parse_swf_from_log(condition_name: str, seed: int) -> Optional[List[float]]:
-    """Parse SWF values from a completed log file.
+    """Parse SWF values from a completed output file.
 
-    Returns a list of SWF values (one per timestep where the planner logs).
+    Returns a list of SWF values (one per timestep).
     """
     output_dir = get_output_dir(condition_name, seed)
+    # Try JSON output first (async path)
+    json_file = output_dir / f"{condition_name}_seed{seed}.json"
+    if json_file.exists():
+        try:
+            data = json.loads(json_file.read_text())
+            metrics = data.get('metrics_history', [])
+            swf_values = [m['swf'] for m in metrics if 'swf' in m]
+            return swf_values if swf_values else None
+        except Exception:
+            pass
+    # Fall back to legacy log file (sync path)
     log_file = output_dir / f"{condition_name}_seed{seed}.log"
     if not log_file.exists():
         return None
@@ -198,8 +207,7 @@ def run_single(
     condition: Dict,
     seed: int,
     model: str,
-    service: str,
-    port: int,
+    quantization: str,
     wandb: bool,
     dry_run: bool = False,
     label: str = "",
@@ -212,7 +220,7 @@ def run_single(
     output_dir = get_output_dir(cond_name, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = build_command(condition, seed, model, service, port, wandb)
+    cmd = build_command(condition, seed, model, quantization, wandb)
 
     if dry_run:
         print(f"  [{label}] {' '.join(cmd)}")
@@ -367,11 +375,9 @@ Examples:
     # Model / inference parameters
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL,
                         help=f"LLM model name (default: {DEFAULT_MODEL})")
-    parser.add_argument("--service", type=str, default=DEFAULT_SERVICE,
-                        choices=["vllm", "ollama"],
-                        help=f"Inference service (default: {DEFAULT_SERVICE})")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help=f"Service port (default: {DEFAULT_PORT})")
+    parser.add_argument("--quantization", type=str, default=DEFAULT_QUANTIZATION,
+                        choices=["awq", "gptq", "fp8", "bitsandbytes", "none"],
+                        help=f"Quantization method (default: {DEFAULT_QUANTIZATION})")
     parser.add_argument("--wandb", action="store_true",
                         help="Enable wandb logging for each run")
 
@@ -437,7 +443,7 @@ Examples:
         for idx, (cond, seed) in enumerate(run_list):
             label = f"{idx+1}/{total}"
             res = run_single(
-                cond, seed, args.model, args.service, args.port,
+                cond, seed, args.model, args.quantization,
                 args.wandb, dry_run=args.dry_run, label=label,
             )
             results.append(res)
@@ -450,7 +456,7 @@ Examples:
                 label = f"{idx+1}/{total}"
                 fut = executor.submit(
                     run_single,
-                    cond, seed, args.model, args.service, args.port,
+                    cond, seed, args.model, args.quantization,
                     args.wandb, dry_run=args.dry_run, label=label,
                 )
                 futures[fut] = (cond["name"], seed)
