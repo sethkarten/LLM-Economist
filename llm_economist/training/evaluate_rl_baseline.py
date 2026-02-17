@@ -137,6 +137,7 @@ async def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
         max_model_len=4096,
         text_only_mode=model_config.text_only_mode,
         gpu_memory_utilization=0.85,  # Lower to avoid OOM during CUDA graph capture
+        kv_cache_dtype="auto",  # Use auto to support A6000 (no fp8e4nv on Ampere)
     )
 
     results = {
