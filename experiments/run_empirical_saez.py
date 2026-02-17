@@ -40,9 +40,8 @@ import os
 os.environ['VLLM_USE_V1'] = '0'
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 os.environ['TORCHDYNAMO_DISABLE'] = '1'
-# Only enable offline mode on SLURM (compute nodes have no internet)
-# SSH resources like Cynthia/Pikachu have internet access
-if not os.environ.get('HF_TOKEN') and 'SLURM_JOB_ID' in os.environ:
+# Enable offline mode if HF_TOKEN not set (use cached models for gated repos like gemma)
+if not os.environ.get('HF_TOKEN'):
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
 if 'SLURM_JOB_ID' in os.environ:
@@ -67,6 +66,34 @@ from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_cached_model_path(hf_name: str) -> str:
+    """Resolve HuggingFace model name to cached snapshot path for offline mode."""
+    if os.environ.get('HF_HUB_OFFLINE') != '1':
+        return hf_name
+
+    hf_cache = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
+    model_dir_name = f"models--{hf_name.replace('/', '--')}"
+
+    possible_paths = [
+        os.path.join(hf_cache, model_dir_name),
+        os.path.join(hf_cache, 'hub', model_dir_name),
+        os.path.join('/data1/milkkarten/.cache/huggingface', model_dir_name),
+    ]
+
+    for model_cache_dir in possible_paths:
+        if os.path.exists(model_cache_dir):
+            snapshots_dir = os.path.join(model_cache_dir, 'snapshots')
+            if os.path.exists(snapshots_dir):
+                snapshots = os.listdir(snapshots_dir)
+                if snapshots:
+                    resolved = os.path.join(snapshots_dir, snapshots[0])
+                    print(f"Offline mode: resolved {hf_name} -> {resolved}")
+                    return resolved
+
+    print(f"WARNING: Could not find cached model for {hf_name}, using name as-is")
+    return hf_name
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +377,11 @@ class EmpiricalSaezExperiment:
         ):
             dtype = "bfloat16"
 
+        # Resolve model path (handle offline mode with cached gated models)
+        resolved_model = resolve_cached_model_path(model_config.hf_name)
+
         self.engine = ScalableInferenceEngine(
-            model_name=model_config.hf_name,
+            model_name=resolved_model,
             tensor_parallel_size=self.tensor_parallel,
             quantization=quant_str,
             max_model_len=4096,
