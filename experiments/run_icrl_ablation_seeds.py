@@ -104,7 +104,7 @@ MAX_TIMESTEPS = 2000
 TAX_YEAR_LENGTH = 25
 SCENARIO = "bounded"
 DEFAULT_SEEDS = [0, 1, 2]
-DEFAULT_MODEL = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
+DEFAULT_MODEL = "llama-3.1-8b"
 DEFAULT_QUANTIZATION = "awq"
 
 RESULTS_ROOT = PROJECT_ROOT / "results" / "icrl_ablation"
