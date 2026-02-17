@@ -273,7 +273,6 @@ class FixedPolicyEvaluator:
                     system_prompts=sys_prompts[batch_start:batch_end],
                     temperatures=[0.7] * (batch_end - batch_start),
                     max_tokens=64,
-                    json_format=True,
                 )
                 response = await self.engine.generate_batch(batch)
 

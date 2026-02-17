@@ -113,20 +113,20 @@ class GRPOConfig:
 
     # GRPO-specific
     group_size: int = 8           # G: completions per prompt
-    epsilon: float = 0.2         # PPO clip range
+    epsilon: float = 0.1         # PPO clip range (tighter to prevent format collapse)
     num_groups_per_iter: int = 4  # Number of prompt groups per iteration
-    grpo_beta: float = 0.05     # KL penalty coefficient (reverse KL)
+    grpo_beta: float = 0.1      # KL penalty coefficient (higher to anchor to reference)
 
     # Training
     num_iterations: int = 100
-    learning_rate: float = 5e-7   # More conservative than REINFORCE++ (was 1e-6)
-    max_grad_norm: float = 0.5
+    learning_rate: float = 1e-7   # Ultra-conservative to prevent format collapse
+    max_grad_norm: float = 0.1    # Tight gradient clipping
     temperature: float = 0.8     # Sampling temperature for diverse completions
 
     # LoRA
     use_lora: bool = True
     lora_r: int = 8
-    lora_alpha: int = 8
+    lora_alpha: int = 4           # Effective scaling = alpha/r = 0.5 (was 1.0)
     lora_dropout: float = 0.05
 
     # GPU optimization
