@@ -154,7 +154,7 @@ class AsyncLLMEconomist:
             model_name=model_config.hf_name,
             tensor_parallel_size=self.tensor_parallel_size,
             quantization=quant_value,
-            max_model_len=8192,
+            max_model_len=16384,
             enable_prefix_caching=True,
             enable_chunked_prefill=True,
             kv_cache_dtype="auto",  # Auto for better Blackwell compatibility
