@@ -154,7 +154,7 @@ class AsyncLLMEconomist:
             model_name=model_config.hf_name,
             tensor_parallel_size=self.tensor_parallel_size,
             quantization=quant_value,
-            max_model_len=16384,
+            max_model_len=32768,
             enable_prefix_caching=True,
             enable_chunked_prefill=True,
             kv_cache_dtype="auto",  # Auto for better Blackwell compatibility
@@ -634,6 +634,7 @@ ICRL (In-Context RL) Simulation
             'metrics_history': self.metrics_history,
         }
 
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         with open(filepath, 'w') as f:
             json.dump(results, f, indent=2)
 
@@ -668,11 +669,15 @@ async def main_async(args):
     )
 
     await simulator.initialize()
-    results = await simulator.run()
-
-    # Save results
-    if args.output:
-        simulator.save_results(args.output)
+    try:
+        results = await simulator.run()
+    except Exception as e:
+        logger.error(f"Simulation failed at step {len(simulator.metrics_history)}: {e}")
+        results = simulator.metrics_history
+    finally:
+        # Always save results (even partial) on crash
+        if args.output and simulator.metrics_history:
+            simulator.save_results(args.output)
 
     return results
 
