@@ -23,35 +23,33 @@ try:
     log(f"Args: {sys.argv[1:]}")
     log(f"CWD: {os.getcwd()}")
 
-    # Install the package if needed (use uv if available, fallback to pip)
-    log("Installing package...")
-    uv_path = os.path.expanduser("~/.local/bin/uv")
-    if os.path.exists(uv_path):
-        install_cmd = [uv_path, "pip", "install", "-e", repo_root]
-    else:
-        install_cmd = [sys.executable, "-m", "pip", "install", "-e", repo_root]
-    log(f"Install cmd: {' '.join(install_cmd)}")
-    result = subprocess.run(install_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        log(f"Install FAILED (exit {result.returncode})")
-        log(f"STDOUT: {result.stdout[-1000:]}")
-        log(f"STDERR: {result.stderr[-1000:]}")
-        sys.exit(1)
-    log("Package installed OK")
+    # Check if package is already importable; skip install on compute nodes (no internet)
+    try:
+        import llm_economist
+        log(f"Package already installed: {llm_economist.__file__}")
+    except ImportError:
+        log("Package not found, attempting install...")
+        uv_path = os.path.expanduser("~/.local/bin/uv")
+        if os.path.exists(uv_path):
+            install_cmd = [uv_path, "pip", "install", "--no-deps", "-e", repo_root]
+        else:
+            install_cmd = [sys.executable, "-m", "pip", "install", "--no-deps", "-e", repo_root]
+        log(f"Install cmd: {' '.join(install_cmd)}")
+        result = subprocess.run(install_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log(f"Install FAILED (exit {result.returncode})")
+            log(f"STDOUT: {result.stdout[-1000:]}")
+            log(f"STDERR: {result.stderr[-1000:]}")
+            sys.exit(1)
+        log("Package installed OK")
 
     # Now run main_async as a module with all forwarded args
+    # Stream output directly (no capture) so SLURM logs show progress in real-time
     log("Launching main_async...")
-    result = subprocess.run(
-        [sys.executable, "-m", "llm_economist.main_async"] + sys.argv[1:],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-    )
+    cmd = [sys.executable, "-m", "llm_economist.main_async"] + sys.argv[1:]
+    log(f"Command: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=repo_root)
     log(f"main_async exited with code {result.returncode}")
-    if result.stdout:
-        log(f"STDOUT (last 2000): {result.stdout[-2000:]}")
-    if result.stderr:
-        log(f"STDERR (last 2000): {result.stderr[-2000:]}")
     sys.exit(result.returncode)
 
 except Exception as e:
