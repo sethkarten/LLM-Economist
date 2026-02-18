@@ -18,8 +18,19 @@ def log(msg):
 
 try:
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # Ensure HF cache is set for compute nodes without internet
+    if "HF_HOME" not in os.environ:
+        # della uses /scratch/gpfs/CHIJ/milkkarten/huggingface/
+        scratch_hf = "/scratch/gpfs/CHIJ/milkkarten/huggingface/"
+        if os.path.isdir(scratch_hf):
+            os.environ["HF_HOME"] = scratch_hf
+    os.environ["HF_HUB_OFFLINE"] = "1"  # Never try to download on compute nodes
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
     log(f"Repo root: {repo_root}")
     log(f"Python: {sys.executable}")
+    log(f"HF_HOME: {os.environ.get('HF_HOME', 'NOT SET')}")
     log(f"Args: {sys.argv[1:]}")
     log(f"CWD: {os.getcwd()}")
 
