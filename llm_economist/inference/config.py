@@ -185,6 +185,22 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
         notes="RTX 5090: 60.5 req/s with AWQ, supports thinking mode"
     ),
 
+    # Qwen3-8B FP8
+    "qwen3-8b-fp8": ModelConfig(
+        name="Qwen3-8B-FP8",
+        hf_name="Qwen/Qwen3-8B-FP8",
+        total_params=8.0,
+        active_params=8.0,
+        architecture="dense",
+        context_length=131072,
+        recommended_quantization=QuantizationType.FP8,
+        vram_fp16=16.0,
+        vram_int4=5.0,
+        supports_thinking=True,
+        chat_template="qwen",
+        notes="FP8 quantized Qwen3-8B"
+    ),
+
     # OLMo-3-7B-Instruct FP8 (31.5 req/s - slower, no AWQ available)
     "olmo3-7b": ModelConfig(
         name="OLMo-3-7B-Instruct",
