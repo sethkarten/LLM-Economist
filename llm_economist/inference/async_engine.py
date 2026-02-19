@@ -43,6 +43,16 @@ def detect_blackwell_gpu() -> bool:
     return False
 
 
+import re
+
+_THINK_BLOCK_RE = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> blocks from model output (Qwen3 thinking mode residue)."""
+    return _THINK_BLOCK_RE.sub('', text).strip()
+
+
 @dataclass
 class BatchRequest:
     """A batch of requests to be processed together."""
@@ -119,14 +129,15 @@ class ScalableInferenceEngine:
 
         self._engine = None
         self._initialized = False
+        self._tokenizer = None
+        self._supports_system_role = True
+        self._disable_thinking = False
 
         # Auto-detect Blackwell GPU and configure accordingly
         self._is_blackwell = detect_blackwell_gpu()
         if self._is_blackwell:
             logger.info("Detected Blackwell GPU (RTX 50xx series), enabling compatibility mode")
-            # Set TRITON_ATTN backend for Blackwell (FLASH_ATTN kernels incompatible)
-            os.environ['VLLM_ATTENTION_BACKEND'] = 'TRITON_ATTN'
-            # Force eager mode if not explicitly set
+            # Force eager mode if not explicitly set (CUDA graph capture can fail on Blackwell)
             if enforce_eager is None:
                 enforce_eager = True
             # Use auto KV cache dtype for Blackwell
@@ -157,6 +168,10 @@ class ScalableInferenceEngine:
             'download_dir': download_dir,
         }
 
+        # Blackwell patch: standalone flash_attn requires block_size=256
+        if self._is_blackwell:
+            self._config['block_size'] = 256
+
         # Add text-only mode for multimodal models (e.g., Gemma 3)
         if text_only_mode:
             self._config['limit_mm_per_prompt'] = {'image': 0}
@@ -176,6 +191,49 @@ class ScalableInferenceEngine:
         """Lazily initialize the vLLM engine."""
         if self._initialized:
             return
+
+        # Load the tokenizer for chat template formatting
+        self._tokenizer = None
+        self._supports_system_role = True
+        try:
+            from transformers import AutoTokenizer
+            logger.info(f"Loading tokenizer for chat template: {self.model_name}")
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                self.model_name, trust_remote_code=True
+            )
+            # Check if the model's chat template supports a system role.
+            # We do this by trying to apply a template with a system message
+            # and checking if it raises an error (e.g., Gemma models).
+            try:
+                self._tokenizer.apply_chat_template(
+                    [
+                        {"role": "system", "content": "test"},
+                        {"role": "user", "content": "test"},
+                    ],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            except Exception:
+                self._supports_system_role = False
+                logger.info(f"Model {self.model_name} does not support system role, will prepend to user message")
+            # Detect if the tokenizer supports enable_thinking kwarg (Qwen3 models)
+            # and disable it to prevent <think> blocks from consuming output tokens
+            try:
+                self._tokenizer.apply_chat_template(
+                    [{"role": "user", "content": "test"}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+                self._disable_thinking = True
+                logger.info("Model supports thinking mode — disabling to get direct JSON output")
+            except TypeError:
+                self._disable_thinking = False
+
+            logger.info(f"Tokenizer loaded successfully, supports_system_role={self._supports_system_role}, disable_thinking={self._disable_thinking}")
+        except Exception as e:
+            logger.warning(f"Could not load tokenizer for chat template, will use generic fallback: {e}")
+            self._tokenizer = None
 
         try:
             from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
@@ -206,14 +264,53 @@ class ScalableInferenceEngine:
 
             logger.info(f"vLLM engine initialized successfully for {self.model_name}")
 
-        except ImportError:
-            logger.warning("vLLM not available, falling back to synchronous mode")
+        except ImportError as e:
+            logger.warning(f"vLLM not available, falling back to synchronous mode: {e}")
+            import traceback
+            traceback.print_exc()
             self._engine = None
             self._initialized = True
 
     def _format_prompt(self, system_prompt: str, user_prompt: str) -> str:
-        """Format system and user prompts for the model."""
-        # Use chat template format
+        """
+        Format system and user prompts using the model's chat template.
+
+        Uses the tokenizer's apply_chat_template() to produce the correct
+        format for each model family (Qwen, Llama, Gemma, Mistral, etc.).
+        Falls back to a generic template if the tokenizer is unavailable.
+        """
+        if self._tokenizer is not None:
+            # Build the message list based on whether the model supports system role
+            if self._supports_system_role and system_prompt:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            else:
+                # Model doesn't support system role (e.g., Gemma) —
+                # prepend system prompt to user message
+                if system_prompt:
+                    combined = f"{system_prompt}\n\n{user_prompt}"
+                else:
+                    combined = user_prompt
+                messages = [
+                    {"role": "user", "content": combined},
+                ]
+
+            try:
+                # Disable thinking mode for models that support it (e.g., Qwen3)
+                # to prevent <think>...</think> blocks from consuming all tokens
+                kwargs = dict(
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                if self._disable_thinking:
+                    kwargs['enable_thinking'] = False
+                return self._tokenizer.apply_chat_template(messages, **kwargs)
+            except Exception as e:
+                logger.warning(f"apply_chat_template failed, using fallback: {e}")
+
+        # Generic fallback template (used only if tokenizer is unavailable)
         return f"<|system|>\n{system_prompt}<|end|>\n<|user|>\n{user_prompt}<|end|>\n<|assistant|>\n"
 
     async def generate_single(
@@ -258,6 +355,11 @@ class ScalableInferenceEngine:
 
         response_text = output.outputs[0].text
         latency = time() - start_time
+
+        # Strip any residual <think>...</think> blocks (Qwen3 with thinking disabled
+        # still adds empty think tags that waste tokens and break JSON parsing)
+        if self._disable_thinking:
+            response_text = _strip_think_blocks(response_text)
 
         self._total_requests += 1
         self._total_time += latency
@@ -369,7 +471,10 @@ class ScalableInferenceEngine:
             pass
 
         latency = time() - start_time
-        return output.outputs[0].text, False, latency
+        text = output.outputs[0].text
+        if self._disable_thinking:
+            text = _strip_think_blocks(text)
+        return text, False, latency
 
     async def _fallback_generate(
         self,
@@ -395,6 +500,23 @@ class ScalableInferenceEngine:
                     device_map="auto",
                     trust_remote_code=True
                 )
+                # If the main tokenizer wasn't loaded (e.g., initialize() failed
+                # to load it), use the fallback tokenizer for chat template formatting
+                if self._tokenizer is None:
+                    self._tokenizer = self._fallback_tokenizer
+                    # Re-check system role support
+                    try:
+                        self._tokenizer.apply_chat_template(
+                            [
+                                {"role": "system", "content": "test"},
+                                {"role": "user", "content": "test"},
+                            ],
+                            tokenize=False,
+                            add_generation_prompt=True,
+                        )
+                        self._supports_system_role = True
+                    except Exception:
+                        self._supports_system_role = False
 
             prompt = self._format_prompt(system_prompt, user_prompt)
             inputs = self._fallback_tokenizer(prompt, return_tensors="pt").to(
