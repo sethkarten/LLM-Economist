@@ -382,11 +382,12 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
                 parse_fail += 1
                 if self.debug and i < 3:
                     logger.debug(f"  Worker {i} parse FAILED: {e}, raw={repr(response[:200])}")
-        if self.debug and timestep < 5:
-            logger.debug(f"  Step {timestep}: {parse_success} parsed OK, {parse_fail} failed")
 
             # Update income
             agent.income = agent.skill * agent.labor
+
+        if self.debug and timestep < 5:
+            logger.debug(f"  Step {timestep}: {parse_success} parsed OK, {parse_fail} failed")
 
         # Step 4: Apply taxes and calculate utilities
         self._apply_taxes()
