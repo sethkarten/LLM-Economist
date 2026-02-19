@@ -91,6 +91,7 @@ class AsyncLLMEconomist:
         disable_exploitation: bool = False,
         swf_weighting: str = "rawlsian",
         history_len: int = 50,
+        bracket_setting: str = "three",
     ):
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
@@ -106,6 +107,7 @@ class AsyncLLMEconomist:
         self.disable_exploitation = disable_exploitation
         self.swf_weighting = swf_weighting
         self.history_len = history_len
+        self.bracket_setting = bracket_setting
 
         # Set seeds
         np.random.seed(seed)
@@ -121,9 +123,12 @@ class AsyncLLMEconomist:
         self.state: Optional[SimulationState] = None
         self.personas: Dict[str, str] = {}
 
-        # Tax configuration (US Federal 2024 brackets)
-        self.tax_brackets = [0, 23000, 47000, 94000, 192000, 244000, 500000, 1000000]
-        self.tax_rates = [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37]  # Initial rates
+        # Tax configuration from bracket setting
+        from llm_economist.utils.bracket import get_brackets, get_num_brackets
+        self.tax_brackets = get_brackets(bracket_setting)
+        num_b = get_num_brackets(bracket_setting)
+        # Initial rates: uniform 15% across all brackets
+        self.tax_rates = [0.15] * num_b
 
         # Logging
         self.metrics_history: List[Dict] = []
@@ -362,14 +367,23 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         worker_responses = await self._batch_worker_decisions(timestep)
 
         # Step 3: Update agent states based on responses
+        parse_success = 0
+        parse_fail = 0
         for i, (response, _) in enumerate(worker_responses):
             agent = self.state.agent_states[i]
             try:
                 data = json.loads(response)
-                agent.labor = float(np.clip(data.get('labor_hours', 40), 0, 100))
-            except (json.JSONDecodeError, KeyError, TypeError):
-                # Keep previous labor if parsing fails
-                pass
+                new_labor = float(np.clip(data.get('labor_hours', 40), 0, 100))
+                if self.debug and i < 3 and timestep < 3:
+                    logger.debug(f"  Worker {i} response: labor_hours={data.get('labor_hours')}, parsed={new_labor:.1f}, prev={agent.labor:.1f}")
+                agent.labor = new_labor
+                parse_success += 1
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                parse_fail += 1
+                if self.debug and i < 3:
+                    logger.debug(f"  Worker {i} parse FAILED: {e}, raw={repr(response[:200])}")
+        if self.debug and timestep < 5:
+            logger.debug(f"  Step {timestep}: {parse_success} parsed OK, {parse_fail} failed")
 
             # Update income
             agent.income = agent.skill * agent.labor
@@ -625,6 +639,8 @@ ICRL (In-Context RL) Simulation
                 'history_len': self.history_len,
                 'disable_exploration': self.disable_exploration,
                 'disable_exploitation': self.disable_exploitation,
+                'bracket_setting': self.bracket_setting,
+                'tax_year_length': self.tax_year_length,
             },
             'final_state': {
                 'swf': self.state.swf,
@@ -666,6 +682,7 @@ async def main_async(args):
         disable_exploitation=args.disable_exploitation,
         swf_weighting=args.swf_weighting,
         history_len=args.history_len,
+        bracket_setting=args.bracket_setting,
     )
 
     await simulator.initialize()
@@ -710,6 +727,9 @@ def create_argument_parser():
                        help='Simulation scenario')
     parser.add_argument('--tax-year-length', type=int, default=128,
                        help='Steps per tax year')
+    parser.add_argument('--bracket-setting', type=str, default='three',
+                       choices=['flat', 'three', 'US_FED'],
+                       help='Tax bracket structure (flat=1, three=3, US_FED=7 brackets)')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed')
 
