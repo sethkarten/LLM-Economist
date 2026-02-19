@@ -135,8 +135,13 @@ class ScalableInferenceEngine:
 
         # Auto-detect Blackwell GPU and configure accordingly
         self._is_blackwell = detect_blackwell_gpu()
+        self._attention_backend = None
         if self._is_blackwell:
             logger.info("Detected Blackwell GPU (RTX 50xx series), enabling compatibility mode")
+            # Force TRITON_ATTN backend on Blackwell — FLASH_ATTN (even patched
+            # standalone flash_attn_2_cuda) corrupts outputs on concurrent requests
+            self._attention_backend = 'TRITON_ATTN'
+            logger.info("Forcing TRITON_ATTN backend for Blackwell batch safety")
             # Force eager mode if not explicitly set (CUDA graph capture can fail on Blackwell)
             if enforce_eager is None:
                 enforce_eager = True
@@ -168,9 +173,9 @@ class ScalableInferenceEngine:
             'download_dir': download_dir,
         }
 
-        # Blackwell patch: standalone flash_attn requires block_size=256
-        if self._is_blackwell:
-            self._config['block_size'] = 256
+        # Force TRITON_ATTN on Blackwell via engine args
+        if self._attention_backend:
+            self._config['attention_backend'] = self._attention_backend
 
         # Add text-only mode for multimodal models (e.g., Gemma 3)
         if text_only_mode:
