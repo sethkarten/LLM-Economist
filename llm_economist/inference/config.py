@@ -218,8 +218,25 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
         vram_int4=3.0,
         supports_thinking=False,
         chat_template="gemma",
-        text_only_mode=False,  # Not a multimodal model
+        text_only_mode=True,  # Multimodal model, disable vision encoder for text-only
         notes="RTX 5090: 92.0 req/s with BF16 text-only - FASTEST MODEL"
+    ),
+
+    # Gemma-3-4B-PT (base, no instruction tuning) - may be less anchored to defaults
+    "gemma3-4b-pt": ModelConfig(
+        name="Gemma-3-4B-PT",
+        hf_name="google/gemma-3-4b-pt",
+        total_params=4.0,
+        active_params=4.0,
+        architecture="dense",
+        context_length=128000,
+        recommended_quantization=QuantizationType.NONE,
+        vram_fp16=8.6,
+        vram_int4=3.0,
+        supports_thinking=False,
+        chat_template="gemma",
+        text_only_mode=True,  # Multimodal model, disable vision encoder for text-only
+        notes="Base model (no IT), may explore more diverse outputs"
     ),
 
     # Gemma-3-12B BF16 text-only (65.8 req/s)
@@ -235,7 +252,7 @@ SUPPORTED_MODELS: Dict[str, ModelConfig] = {
         vram_int4=7.0,
         supports_thinking=False,
         chat_template="gemma",
-        text_only_mode=False,  # Not a multimodal model
+        text_only_mode=True,  # Multimodal model, disable vision encoder for text-only
         notes="RTX 5090: 65.8 req/s with BF16 text-only, higher quality than 4B"
     ),
 
