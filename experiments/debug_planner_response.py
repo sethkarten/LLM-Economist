@@ -234,7 +234,7 @@ async def main():
     # -----------------------------------------------------------------------
     # 1. Load model via the inference config system
     # -----------------------------------------------------------------------
-    model_key = os.environ.get("DEBUG_MODEL", "qwen3-8b-fp8")
+    model_key = os.environ.get("DEBUG_MODEL", "qwen3-8b")
     model_config = get_model_config(model_key)
     print(f"Model key: {model_key}")
     print(f"HuggingFace name: {model_config.hf_name}")
@@ -257,7 +257,7 @@ async def main():
         model_name=model_config.hf_name,
         tensor_parallel_size=1,
         quantization=quant_value,
-        max_model_len=32768,
+        max_model_len=8192,
         enable_prefix_caching=True,
         enable_chunked_prefill=True,
         kv_cache_dtype="auto",
