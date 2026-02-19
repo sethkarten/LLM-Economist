@@ -232,9 +232,9 @@ def rates_are_identical(rates_a: list[float], rates_b: list[float], tol: float =
 
 async def main():
     # -----------------------------------------------------------------------
-    # 1. Load Gemma-3-4B-IT via the inference config system
+    # 1. Load model via the inference config system
     # -----------------------------------------------------------------------
-    model_key = "gemma3-4b"
+    model_key = os.environ.get("DEBUG_MODEL", "qwen3-8b-fp8")
     model_config = get_model_config(model_key)
     print(f"Model key: {model_key}")
     print(f"HuggingFace name: {model_config.hf_name}")
@@ -242,9 +242,16 @@ async def main():
     print(f"Text-only mode: {model_config.text_only_mode}")
     print()
 
-    # Match how AsyncLLMEconomist.initialize() creates the engine for Gemma 3
-    quant_value = None  # Gemma 3 uses BF16 (QuantizationType.NONE)
-    dtype = "bfloat16"  # Matches the logic in initialize()
+    # Determine quantization and dtype from config
+    quant_value = None
+    dtype = None
+    if model_config.recommended_quantization == QuantizationType.NONE:
+        quant_value = None
+        dtype = "bfloat16"
+    elif model_config.recommended_quantization == QuantizationType.FP8:
+        quant_value = "fp8"
+    elif model_config.recommended_quantization == QuantizationType.AWQ:
+        quant_value = "awq"
 
     engine = ScalableInferenceEngine(
         model_name=model_config.hf_name,
