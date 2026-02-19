@@ -4,19 +4,20 @@ Run tax-year-length ablation experiments with multiple seeds for error bars.
 
 Ablation variable: tax_year_length (number of worker timesteps per planner update).
 All conditions use history_len=64, 100 agents, bounded scenario, and 32 tax years total.
+Model: gemma3-4b (google/gemma-3-4b-it) in BF16 (no quantization).
 
 7 conditions x 10 seeds = 70 total runs.
 
-Conditions (tax year length ablation):
+Tax year length conditions (5):
   TY8   : tax_year_length=8,   max_timesteps=256   (32 tax years)
   TY16  : tax_year_length=16,  max_timesteps=512
   TY32  : tax_year_length=32,  max_timesteps=1024
   TY64  : tax_year_length=64,  max_timesteps=2048
   TY128 : tax_year_length=128, max_timesteps=4096
 
-Conditions (prompt ablation at TY64):
-  TY64_no_explore : TY64 with --disable-exploration
-  TY64_no_exploit : TY64 with --disable-exploitation
+Prompt ablation conditions (2, at TY64):
+  TY64_no_explore : TY=64, exploration disabled
+  TY64_no_exploit : TY=64, exploitation disabled
 
 Usage:
     python experiments/run_tax_year_ablation.py --dry-run              # Print commands
@@ -28,13 +29,11 @@ Usage:
 
 import os
 import sys
-import re
 import json
 import time
 import argparse
 import subprocess
 from pathlib import Path
-from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import List, Dict, Optional, Tuple
 
@@ -47,21 +46,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Experiment conditions
 # ---------------------------------------------------------------------------
 
-# Each condition varies tax_year_length and max_timesteps together so that
-# all conditions complete exactly 32 tax years.
-#
-# Fields:
-#   name             : short identifier (used in CLI --conditions filter and directory name)
-#   tax_year_length  : number of worker timesteps between planner updates
-#   max_timesteps    : total worker timesteps (= 32 * tax_year_length)
-#   description      : human-readable label
+NUM_TAX_YEARS = 32
 
 CONDITIONS = [
     # Tax year length ablation (both exploration and exploitation enabled)
     {
         "name": "TY8",
         "tax_year_length": 8,
-        "max_timesteps": 256,
+        "max_timesteps": 8 * NUM_TAX_YEARS,   # 256
         "disable_exploration": False,
         "disable_exploitation": False,
         "description": "tax_year_length=8  (32 tax years, 256 total steps)",
@@ -69,7 +61,7 @@ CONDITIONS = [
     {
         "name": "TY16",
         "tax_year_length": 16,
-        "max_timesteps": 512,
+        "max_timesteps": 16 * NUM_TAX_YEARS,  # 512
         "disable_exploration": False,
         "disable_exploitation": False,
         "description": "tax_year_length=16 (32 tax years, 512 total steps)",
@@ -77,7 +69,7 @@ CONDITIONS = [
     {
         "name": "TY32",
         "tax_year_length": 32,
-        "max_timesteps": 1024,
+        "max_timesteps": 32 * NUM_TAX_YEARS,  # 1024
         "disable_exploration": False,
         "disable_exploitation": False,
         "description": "tax_year_length=32 (32 tax years, 1024 total steps)",
@@ -85,7 +77,7 @@ CONDITIONS = [
     {
         "name": "TY64",
         "tax_year_length": 64,
-        "max_timesteps": 2048,
+        "max_timesteps": 64 * NUM_TAX_YEARS,  # 2048
         "disable_exploration": False,
         "disable_exploitation": False,
         "description": "tax_year_length=64 (32 tax years, 2048 total steps)",
@@ -93,7 +85,7 @@ CONDITIONS = [
     {
         "name": "TY128",
         "tax_year_length": 128,
-        "max_timesteps": 4096,
+        "max_timesteps": 128 * NUM_TAX_YEARS, # 4096
         "disable_exploration": False,
         "disable_exploitation": False,
         "description": "tax_year_length=128 (32 tax years, 4096 total steps)",
@@ -102,7 +94,7 @@ CONDITIONS = [
     {
         "name": "TY64_no_explore",
         "tax_year_length": 64,
-        "max_timesteps": 2048,
+        "max_timesteps": 64 * NUM_TAX_YEARS,  # 2048
         "disable_exploration": True,
         "disable_exploitation": False,
         "description": "TY=64, no exploration (exploitation only)",
@@ -110,7 +102,7 @@ CONDITIONS = [
     {
         "name": "TY64_no_exploit",
         "tax_year_length": 64,
-        "max_timesteps": 2048,
+        "max_timesteps": 64 * NUM_TAX_YEARS,  # 2048
         "disable_exploration": False,
         "disable_exploitation": True,
         "description": "TY=64, no exploitation (exploration only)",
@@ -133,7 +125,6 @@ RESULTS_ROOT = PROJECT_ROOT / "results" / "tax_year_ablation"
 # ---------------------------------------------------------------------------
 
 def get_output_dir(condition_name: str, seed: int) -> Path:
-    """Return the output directory for a given condition and seed."""
     return RESULTS_ROOT / condition_name / f"seed_{seed}"
 
 
@@ -144,7 +135,6 @@ def build_command(
     quantization: str,
     wandb: bool,
 ) -> List[str]:
-    """Build the subprocess command for a single run."""
     output_dir = get_output_dir(condition["name"], seed)
     cond_name = condition["name"]
 
@@ -162,9 +152,9 @@ def build_command(
         "--output", str(output_dir / f"{cond_name}_seed{seed}.json"),
     ]
 
-    if condition.get("disable_exploration"):
+    if condition["disable_exploration"]:
         cmd.append("--disable-exploration")
-    if condition.get("disable_exploitation"):
+    if condition["disable_exploitation"]:
         cmd.append("--disable-exploitation")
     if wandb:
         cmd.append("--wandb")
@@ -173,7 +163,6 @@ def build_command(
 
 
 def check_completed(condition_name: str, seed: int) -> bool:
-    """Check whether a run already completed by looking for its output file."""
     output_dir = get_output_dir(condition_name, seed)
     json_file = output_dir / f"{condition_name}_seed{seed}.json"
     if json_file.exists():
@@ -186,10 +175,6 @@ def check_completed(condition_name: str, seed: int) -> bool:
 
 
 def parse_swf_from_output(condition_name: str, seed: int) -> Optional[List[float]]:
-    """Parse SWF values from a completed output JSON file.
-
-    Returns a list of SWF values (one per timestep), or None if not available.
-    """
     output_dir = get_output_dir(condition_name, seed)
     json_file = output_dir / f"{condition_name}_seed{seed}.json"
     if json_file.exists():
@@ -212,10 +197,6 @@ def run_single(
     dry_run: bool = False,
     label: str = "",
 ) -> Tuple[str, int, bool, Optional[str]]:
-    """Run (or dry-run) a single experiment.
-
-    Returns (condition_name, seed, success, error_msg).
-    """
     cond_name = condition["name"]
     output_dir = get_output_dir(cond_name, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -226,7 +207,8 @@ def run_single(
         print(f"  [{label}] {' '.join(cmd)}")
         return (cond_name, seed, True, None)
 
-    print(f"  [{label}] Starting {cond_name} seed={seed} ...")
+    print(f"  [{label}] Starting {cond_name} seed={seed} "
+          f"(TY={condition['tax_year_length']}, steps={condition['max_timesteps']}) ...")
     start = time.time()
 
     try:
@@ -235,14 +217,13 @@ def run_single(
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=3600 * 12,  # 12-hour hard timeout
+            timeout=3600 * 24,  # 24-hour hard timeout
         )
         elapsed = time.time() - start
         if result.returncode != 0:
             err_msg = result.stderr[-500:] if result.stderr else "unknown error"
             print(f"  [{label}] FAILED {cond_name} seed={seed} "
                   f"(exit {result.returncode}, {elapsed/60:.1f}min)")
-            # Save stderr for debugging
             (output_dir / "stderr.txt").write_text(result.stderr or "")
             return (cond_name, seed, False, err_msg)
         else:
@@ -261,19 +242,17 @@ def run_single(
 # ---------------------------------------------------------------------------
 
 def print_summary(seeds: List[int]):
-    """Parse output files and print mean +/- std final SWF for each condition."""
     try:
         import numpy as np
     except ImportError:
         print("numpy not available; install it to display summary statistics.")
         return
 
-    print(f"\n{'='*80}")
-    print(f"Tax-Year-Length Ablation Summary  "
-          f"({NUM_AGENTS} agents, history_len={HISTORY_LEN}, "
-          f"scenario={SCENARIO}, seeds={seeds})")
-    print(f"{'='*80}")
-    header = (f"{'Condition':<20} {'TY len':>6}  {'Max steps':>10}  {'Explore':>7}  {'Exploit':>7}  "
+    print(f"\n{'='*90}")
+    print(f"Tax Year Ablation Summary  ({NUM_AGENTS} agents, history_len={HISTORY_LEN}, "
+          f"seeds={seeds})")
+    print(f"{'='*90}")
+    header = (f"{'Condition':<20} {'TY':>4}  {'Steps':>5}  {'Explore':>7}  {'Exploit':>7}  "
               f"{'Final SWF (mean +/- std)':>28}  {'Status':>10}")
     print(header)
     print("-" * 90)
@@ -287,8 +266,8 @@ def print_summary(seeds: List[int]):
                 final_swfs.append(swf_vals[-1])
                 completed += 1
 
-        explore_str = "OFF" if cond.get("disable_exploration") else "ON"
-        exploit_str = "OFF" if cond.get("disable_exploitation") else "ON"
+        explore_str = "OFF" if cond["disable_exploration"] else "ON"
+        exploit_str = "OFF" if cond["disable_exploitation"] else "ON"
 
         if final_swfs:
             mean = np.mean(final_swfs)
@@ -298,26 +277,26 @@ def print_summary(seeds: List[int]):
             swf_str = f"{'N/A':>20}"
 
         status_str = f"{completed}/{len(seeds)}"
-        print(f"{cond['name']:<20} {cond['tax_year_length']:>6}  "
-              f"{cond['max_timesteps']:>10}  {explore_str:>7}  {exploit_str:>7}  "
+        print(f"{cond['name']:<20} {cond['tax_year_length']:>4}  "
+              f"{cond['max_timesteps']:>5}  {explore_str:>7}  {exploit_str:>7}  "
               f"{swf_str:>28}  {status_str:>10}")
 
     print(f"{'='*90}\n")
 
 
 def list_conditions(seeds: List[int]):
-    """List all conditions and per-seed completion status."""
-    print(f"\n{'='*80}")
-    print(f"Tax-Year-Length Ablation Conditions  "
-          f"({NUM_AGENTS} agents, history_len={HISTORY_LEN})")
-    print(f"{'='*80}")
-    print(f"{'#':>2}  {'Name':<20} {'TY len':>6}  {'Steps':>5}  {'Explore':>7}  {'Exploit':>7}  {'Seeds'}")
+    print(f"\n{'='*90}")
+    print(f"Tax Year Ablation Conditions  ({NUM_AGENTS} agents, "
+          f"history_len={HISTORY_LEN}, model={DEFAULT_MODEL})")
+    print(f"{'='*90}")
+    print(f"{'#':>2}  {'Name':<20} {'TY':>4}  {'Steps':>5}  {'Explore':>7}  "
+          f"{'Exploit':>7}  {'Seeds'}")
     print("-" * 90)
 
     total_remaining = 0
     for i, cond in enumerate(CONDITIONS):
-        explore_str = "OFF" if cond.get("disable_exploration") else "ON"
-        exploit_str = "OFF" if cond.get("disable_exploitation") else "ON"
+        explore_str = "OFF" if cond["disable_exploration"] else "ON"
+        exploit_str = "OFF" if cond["disable_exploitation"] else "ON"
 
         seed_status = []
         for seed in seeds:
@@ -327,7 +306,7 @@ def list_conditions(seeds: List[int]):
                 seed_status.append(f"[todo]{seed}")
                 total_remaining += 1
 
-        print(f"{i+1:>2}  {cond['name']:<20} {cond['tax_year_length']:>6}  "
+        print(f"{i+1:>2}  {cond['name']:<20} {cond['tax_year_length']:>4}  "
               f"{cond['max_timesteps']:>5}  {explore_str:>7}  {exploit_str:>7}  "
               f"{'  '.join(seed_status)}")
 
@@ -335,7 +314,7 @@ def list_conditions(seeds: List[int]):
     done = total_runs - total_remaining
     print(f"\nProgress: {done}/{total_runs} runs completed, "
           f"{total_remaining} remaining")
-    print(f"{'='*80}\n")
+    print(f"{'='*90}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +323,8 @@ def list_conditions(seeds: List[int]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run tax-year-length ablation experiments with multiple seeds.",
+        description="Run tax year length ablation experiments with multiple seeds. "
+                    "Each condition produces exactly 32 tax years.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -357,29 +337,26 @@ Examples:
 """,
     )
 
-    # Action flags
     parser.add_argument("--all", action="store_true",
                         help="Run all experiment conditions")
     parser.add_argument("--conditions", nargs="+", type=str, default=None,
-                        help="Run only these conditions (e.g., TY8 TY32 TY128)")
+                        help="Run only these conditions (e.g., TY8 TY64 TY64_no_explore)")
     parser.add_argument("--list", action="store_true",
                         help="List conditions and per-seed completion status")
     parser.add_argument("--summary", action="store_true",
-                        help="Print summary table with mean +/- std final SWF")
+                        help="Print summary table with mean +/- std SWF")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print commands without executing")
 
-    # Execution parameters
     parser.add_argument("--parallel", type=int, default=1,
                         help="Number of experiments to run simultaneously (default: 1)")
     parser.add_argument("--seeds", type=str, default=",".join(str(s) for s in DEFAULT_SEEDS),
-                        help="Comma-separated seed list (default: 0,1,2,3,4,5,6,7,8,9)")
+                        help="Comma-separated seed list (default: 0-9)")
     parser.add_argument("--skip-completed", action="store_true", default=True,
                         help="Skip runs that already completed (default: True)")
     parser.add_argument("--no-skip-completed", action="store_true",
                         help="Re-run even if already completed")
 
-    # Model / inference parameters
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL,
                         help=f"LLM model name (default: {DEFAULT_MODEL})")
     parser.add_argument("--quantization", type=str, default=DEFAULT_QUANTIZATION,
@@ -393,7 +370,6 @@ Examples:
     seeds = [int(s) for s in args.seeds.split(",")]
     skip_completed = not args.no_skip_completed
 
-    # Validate --conditions names
     valid_names = {c["name"] for c in CONDITIONS}
     if args.conditions:
         for name in args.conditions:
@@ -402,17 +378,14 @@ Examples:
                 print(f"Valid conditions: {sorted(valid_names)}")
                 sys.exit(1)
 
-    # --list
     if args.list:
         list_conditions(seeds)
         return
 
-    # --summary
     if args.summary:
         print_summary(seeds)
         return
 
-    # Determine which conditions to run
     if args.all:
         selected = CONDITIONS
     elif args.conditions:
@@ -423,7 +396,6 @@ Examples:
         parser.print_help()
         return
 
-    # Build the run list: (condition, seed) pairs
     run_list: List[Tuple[Dict, int]] = []
     for cond in selected:
         for seed in seeds:
@@ -441,7 +413,7 @@ Examples:
     total = len(run_list)
     print(f"\n{total} runs to execute "
           f"({'DRY RUN' if args.dry_run else f'parallel={args.parallel}'})")
-    print(f"Model: {args.model}  (quantization={args.quantization})")
+    print(f"Model: {args.model}, quantization: {args.quantization}")
     print(f"Fixed params: history_len={HISTORY_LEN}, num_agents={NUM_AGENTS}, "
           f"scenario={SCENARIO}")
     print(f"Results directory: {RESULTS_ROOT}\n")
@@ -449,7 +421,6 @@ Examples:
     start_time = time.time()
 
     if args.parallel <= 1 or args.dry_run:
-        # Sequential execution
         results = []
         for idx, (cond, seed) in enumerate(run_list):
             label = f"{idx+1}/{total}"
@@ -459,7 +430,6 @@ Examples:
             )
             results.append(res)
     else:
-        # Parallel execution with ProcessPoolExecutor
         results = []
         with ProcessPoolExecutor(max_workers=args.parallel) as executor:
             futures = {}
