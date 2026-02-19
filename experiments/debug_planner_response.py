@@ -126,7 +126,7 @@ Your goal is to find tax rates that:
         cue_text += f"The best marginal tax rate historically was TAX={best_rates} corresponding to SWF={best_entry['swf']:.4f}. "
 
     def _calculate_gini(values):
-        if not values or len(values) < 2:
+        if len(values) < 2:
             return 0.0
         sorted_values = sorted(values)
         n = len(sorted_values)
