@@ -316,15 +316,46 @@ Your goal is to find tax rates that:
         # Exploration / exploitation cues (gated by flags)
         cue_text = ""
         if not self.disable_exploration and self.planner_history:
-            cue_text += "Use the historical data to influence your answer in order to maximize SWF, while balancing exploration and exploitation by choosing varying rates of TAX. "
-            cue_text += "Try different rates of TAX before picking the one that corresponds to the highest SWF. "
+            # A: Anti-repetition — identify rates from the last 2 tax years to avoid
+            recent_2 = self.planner_history[-2:]
+            recent_rate_strs = [str([f"{r*100:.1f}%" for r in e['tax_rates']]) for e in recent_2]
+            avoid_str = " and ".join(recent_rate_strs)
+
+            # B: Check if bottom bracket has been frozen — add targeted nudge if so
+            bottom_rates = [e['tax_rates'][0] for e in self.planner_history]
+            bottom_frozen = len(set(round(r, 3) for r in bottom_rates)) == 1
+            bottom_nudge = (
+                f" Note: you have kept the bottom bracket fixed at {bottom_rates[0]*100:.1f}% for every tax year — "
+                "consider testing lower rates (e.g. 5-10%) to incentivize low-income workers, "
+                "or higher rates (e.g. 20-30%) to increase redistribution."
+                if bottom_frozen else ""
+            )
+
+            cue_text += (
+                "To find the true optimal policy, you must explore the full rate space. "
+                f"(A) Do NOT choose rates identical to your last 2 tax years ({avoid_str}) — "
+                "repeating known rates wastes a tax year and provides no new information. "
+                "(B) Vary ALL brackets including the bottom bracket, not just the top ones."
+                f"{bottom_nudge} "
+                "(E) Unexplored rate combinations may yield much higher SWF than your current best — "
+                "the cost of exploring is one tax year, but the reward of finding a better policy is permanent. "
+                "Choose a combination you have never tried before. "
+            )
         if not self.disable_exploitation and self.planner_history:
-            # Compute best average tax rates from recent history
+            # Best from all history
             K = min(self.history_len, len(self.planner_history))
             recent = self.planner_history[-K:]
             best_entry = max(recent, key=lambda x: x['swf'])
             best_rates = [f"{r*100:.1f}%" for r in best_entry['tax_rates']]
-            cue_text += f"The best marginal tax rate historically was TAX={best_rates} corresponding to SWF={best_entry['swf']:.4f}. "
+            # Best from the last 2 tax years specifically
+            recent_2 = self.planner_history[-2:]
+            best_recent = max(recent_2, key=lambda x: x['swf'])
+            best_recent_rates = [f"{r*100:.1f}%" for r in best_recent['tax_rates']]
+            cue_text += (
+                f"The best marginal tax rates overall were TAX={best_rates} (SWF={best_entry['swf']:.4f}). "
+                f"Among your last 2 tax years, the better choice was TAX={best_recent_rates} (SWF={best_recent['swf']:.4f}). "
+                "Use these as a starting point, then adjust one or more brackets to improve further. "
+            )
 
         user_prompt = f"""{history_text}Timestep {timestep}:
 Current tax rates: {[f"{r*100:.1f}%" for r in self.state.tax_rates]}
