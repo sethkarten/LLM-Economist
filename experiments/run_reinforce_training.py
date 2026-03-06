@@ -761,7 +761,9 @@ class REINFORCETrainer:
             (r['system_prompt'], r['user_prompt'], r['tax_rates'])
             for r in valid
         ]
+        t0 = time.time()
         new_log_probs = self.policy.compute_log_prob_batch(prompts_and_actions)
+        t1 = time.time()
 
         # Policy gradient loss: -E[log pi(a|s) * A]
         pg_loss = -(new_log_probs * advantages).mean()
@@ -770,7 +772,10 @@ class REINFORCETrainer:
         kl_loss = torch.tensor(0.0, device=self.policy.device)
         if self.config.kl_coef > 0:
             ref_log_probs = self.policy.compute_ref_log_prob_batch(prompts_and_actions)
+            t2 = time.time()
             kl_loss = (new_log_probs - ref_log_probs).mean()
+        else:
+            t2 = t1
 
         # Entropy bonus (encourage exploration)
         entropy_loss = -new_log_probs.mean()
@@ -779,6 +784,8 @@ class REINFORCETrainer:
 
         self.optimizer.zero_grad()
         total_loss.backward()
+        t3 = time.time()
+        print(f"  [TIMING] log_prob={t1-t0:.1f}s, ref_log_prob={t2-t1:.1f}s, backward={t3-t2:.1f}s", flush=True)
 
         if self.config.clip_grad > 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(
