@@ -171,7 +171,7 @@ class AsyncLLMEconomist:
             model_name=model_config.hf_name,
             tensor_parallel_size=self.tensor_parallel_size,
             quantization=quant_value,
-            max_model_len=32768,
+            max_model_len=4096,  # Worker prompts are ~500 tokens; 4K is plenty
             enable_prefix_caching=True,
             enable_chunked_prefill=True,
             kv_cache_dtype="auto",  # Auto for better Blackwell compatibility
