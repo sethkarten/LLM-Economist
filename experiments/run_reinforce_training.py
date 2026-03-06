@@ -109,7 +109,7 @@ class TrainingConfig:
     num_iterations: int = 500
     lr: float = 1e-5
     kl_coef: float = 0.0  # Set to 0 to skip expensive ref_log_prob (saves ~50% train time)
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.05  # Higher entropy to prevent format collapse
     clip_grad: float = 1.0
     lora_r: int = 8
     lora_alpha: int = 8
