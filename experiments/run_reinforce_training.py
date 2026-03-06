@@ -108,7 +108,7 @@ class TrainingConfig:
     num_tax_years: int = 4          # rollout = num_tax_years * tax_year_length steps
     num_iterations: int = 500
     lr: float = 1e-5
-    kl_coef: float = 0.05
+    kl_coef: float = 0.0  # Set to 0 to skip expensive ref_log_prob (saves ~50% train time)
     entropy_coef: float = 0.01
     clip_grad: float = 1.0
     lora_r: int = 8
@@ -729,7 +729,12 @@ class REINFORCETrainer:
         return rollouts
 
     def train_step(self, rollouts: List[Dict[str, Any]], iter_num: int) -> Dict[str, float]:
-        """GRPO-style policy gradient step."""
+        """REINFORCE policy gradient step.
+
+        Uses gradient accumulation over individual samples to avoid holding
+        all computation graphs in memory simultaneously. Each sample requires
+        one forward+backward pass through the planner (~2s on A6000).
+        """
         self.policy.model.train()
 
         # Filter to format-successful rollouts only
@@ -756,50 +761,58 @@ class REINFORCETrainer:
         if rewards.std() > 1e-8:
             advantages = advantages / (rewards.std() + 1e-8)
 
-        # Recompute log probs with gradients
         prompts_and_actions = [
             (r['system_prompt'], r['user_prompt'], r['tax_rates'])
             for r in valid
         ]
+
         t0 = time.time()
-        new_log_probs = self.policy.compute_log_prob_batch(prompts_and_actions)
+        self.optimizer.zero_grad()
+
+        total_pg = 0.0
+        total_kl = 0.0
+        total_ent = 0.0
+        n = len(valid)
+
+        # Process each sample individually: forward + backward, accumulate grads
+        for i in range(n):
+            pa = prompts_and_actions[i]
+            adv = advantages[i]
+
+            # Forward with gradients
+            new_lp = self.policy.compute_log_prob_batch([pa])
+            pg_i = -(new_lp[0] * adv)
+            ent_i = -new_lp[0]
+
+            kl_i = torch.tensor(0.0, device=self.policy.device)
+            if self.config.kl_coef > 0:
+                ref_lp = self.policy.compute_ref_log_prob_batch([pa])
+                kl_i = new_lp[0] - ref_lp[0]
+
+            loss_i = pg_i + self.config.kl_coef * kl_i - self.config.entropy_coef * ent_i
+            (loss_i / n).backward()
+
+            total_pg += pg_i.item()
+            total_kl += kl_i.item()
+            total_ent += ent_i.item()
+
         t1 = time.time()
 
-        # Policy gradient loss: -E[log pi(a|s) * A]
-        pg_loss = -(new_log_probs * advantages).mean()
-
-        # KL penalty against frozen base model
-        kl_loss = torch.tensor(0.0, device=self.policy.device)
-        if self.config.kl_coef > 0:
-            ref_log_probs = self.policy.compute_ref_log_prob_batch(prompts_and_actions)
-            t2 = time.time()
-            kl_loss = (new_log_probs - ref_log_probs).mean()
-        else:
-            t2 = t1
-
-        # Entropy bonus (encourage exploration)
-        entropy_loss = -new_log_probs.mean()
-
-        total_loss = pg_loss + self.config.kl_coef * kl_loss - self.config.entropy_coef * entropy_loss
-
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        t3 = time.time()
-        print(f"  [TIMING] log_prob={t1-t0:.1f}s, ref_log_prob={t2-t1:.1f}s, backward={t3-t2:.1f}s", flush=True)
-
         if self.config.clip_grad > 0:
-            grad_norm = torch.nn.utils.clip_grad_norm_(
+            torch.nn.utils.clip_grad_norm_(
                 self.policy.model.parameters(), self.config.clip_grad
             )
 
         self.optimizer.step()
         self.scheduler.step()
 
+        print(f"  [TIMING] train_step={t1-t0:.1f}s ({n} samples, {(t1-t0)/n:.1f}s/sample)", flush=True)
+
         return {
-            'loss/total': total_loss.item(),
-            'loss/pg': pg_loss.item(),
-            'loss/kl': kl_loss.item(),
-            'loss/entropy': entropy_loss.item(),
+            'loss/total': total_pg / n + self.config.kl_coef * total_kl / n - self.config.entropy_coef * total_ent / n,
+            'loss/pg': total_pg / n,
+            'loss/kl': total_kl / n,
+            'loss/entropy': total_ent / n,
             'advantage/mean': advantages.mean().item(),
             'advantage/std': advantages.std().item(),
             'lr': self.scheduler.get_last_lr()[0],
