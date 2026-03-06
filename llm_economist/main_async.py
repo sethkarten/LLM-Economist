@@ -96,6 +96,7 @@ class AsyncLLMEconomist:
         external_planner: bool = False,
         fixed_skills: Optional[List[float]] = None,
         fixed_personas: Optional[Dict[str, str]] = None,
+        gpu_memory_utilization: Optional[float] = None,
     ):
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
@@ -113,6 +114,7 @@ class AsyncLLMEconomist:
         self.history_len = history_len
         self.bracket_setting = bracket_setting
         self.external_planner = external_planner
+        self._gpu_memory_utilization = gpu_memory_utilization
 
         # Unique instance ID to prevent request ID collisions when sharing a vLLM engine
         self._instance_id = uuid.uuid4().hex[:8]
@@ -167,7 +169,7 @@ class AsyncLLMEconomist:
         if hasattr(model_config, 'recommended_quantization') and model_config.recommended_quantization == QuantizationType.NONE:
             dtype = "bfloat16"  # Use BF16 for models that don't need quantization
 
-        self.engine = ScalableInferenceEngine(
+        engine_kwargs = dict(
             model_name=model_config.hf_name,
             tensor_parallel_size=self.tensor_parallel_size,
             quantization=quant_value,
@@ -179,6 +181,9 @@ class AsyncLLMEconomist:
             text_only_mode=getattr(model_config, 'text_only_mode', False),
             dtype=dtype,
         )
+        if self._gpu_memory_utilization is not None:
+            engine_kwargs['gpu_memory_utilization'] = self._gpu_memory_utilization
+        self.engine = ScalableInferenceEngine(**engine_kwargs)
         await self.engine.initialize()
 
         # Generate or use fixed personas

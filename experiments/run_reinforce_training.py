@@ -529,6 +529,9 @@ class RolloutEnvironment:
             os.environ["CUDA_VISIBLE_DEVICES"] = self.worker_gpu
             print(f"[RolloutEnv] Set CUDA_VISIBLE_DEVICES={self.worker_gpu} for vLLM worker engine")
 
+        # In single-GPU mode (no worker_gpu), reduce memory for vLLM so planner fits too
+        gpu_mem_util = self.config.gpu_memory_util if self.worker_gpu is not None else 0.50
+
         self.sim = AsyncLLMEconomist(
             num_agents=self.config.num_agents,
             max_timesteps=total_steps,
@@ -543,6 +546,7 @@ class RolloutEnvironment:
             fixed_skills=self.population.skills,
             fixed_personas=self.population.personas,
             bracket_setting=self.config.bracket_setting,
+            gpu_memory_utilization=gpu_mem_util,
         )
         await self.sim.initialize()
 
