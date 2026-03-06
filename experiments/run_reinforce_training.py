@@ -343,8 +343,9 @@ class PlannerPolicy:
                 mask[:pad_len] = 0
             attention_mask.append(mask)
 
-        # Process one at a time to avoid OOM on shared GPU setups
-        chunk_size = 1
+        # Process in chunks. Larger chunks are faster but use more memory.
+        # A6000 (48GB) can handle batch=8 easily; RTX 5090 (32GB) needs smaller chunks.
+        chunk_size = min(4, len(padded_input_ids))
         all_log_probs = []
 
         grad_context = torch.enable_grad() if enable_grad else torch.no_grad()
