@@ -33,11 +33,7 @@ import os
 os.environ['VLLM_USE_V1'] = '0'
 os.environ['TORCH_COMPILE_DISABLE'] = '1'
 os.environ['TORCHDYNAMO_DISABLE'] = '1'
-# Handle offline mode for gated repos
-if not os.environ.get('HF_TOKEN'):
-    os.environ['HF_HUB_OFFLINE'] = '1'
-    os.environ['TRANSFORMERS_OFFLINE'] = '1'
-# SLURM compute nodes have no internet
+# SLURM compute nodes have no internet — force offline mode
 if 'SLURM_JOB_ID' in os.environ:
     os.environ['HF_DATASETS_OFFLINE'] = '1'
     os.environ['HF_HUB_OFFLINE'] = '1'
