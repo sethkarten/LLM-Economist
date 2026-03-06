@@ -107,9 +107,9 @@ class TrainingConfig:
     tax_year_length: int = 64       # simulation steps per tax year
     num_tax_years: int = 4          # rollout = num_tax_years * tax_year_length steps
     num_iterations: int = 500
-    lr: float = 1e-5
-    kl_coef: float = 0.0  # Set to 0 to skip expensive ref_log_prob (saves ~50% train time)
-    entropy_coef: float = 0.05  # Higher entropy to prevent format collapse
+    lr: float = 1e-6  # Conservative LR to prevent format collapse
+    kl_coef: float = 0.05  # Anchor near base model to prevent format collapse
+    entropy_coef: float = 0.01
     clip_grad: float = 1.0
     lora_r: int = 8
     lora_alpha: int = 8
@@ -219,7 +219,7 @@ class PlannerPolicy:
         lora_config = LoraConfig(
             r=self.config.lora_r,
             lora_alpha=self.config.lora_alpha,
-            lora_dropout=0.05,
+            lora_dropout=0.0,
             target_modules=list(self.config.lora_targets),
             bias="none",
             task_type="CAUSAL_LM",
@@ -229,18 +229,22 @@ class PlannerPolicy:
 
         self.model.to(self.device)
 
+    # Forced JSON prefix to prevent format collapse during training.
+    # The model only generates numeric values + closing brackets.
+    JSON_PREFIX = '{"tax_rates": ['
+
     def sample_action(
         self,
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
-        max_new_tokens: int = 256,
-    ) -> Tuple[Optional[List[float]], float]:
+        max_new_tokens: int = 64,
+    ) -> Tuple[Optional[List[float]], float, str]:
         """
-        Sample tax policy action and compute log probability.
+        Sample tax policy action using forced JSON prefix for robustness.
 
         Returns:
-            Tuple of (tax_rates or None, log_prob float)
+            Tuple of (tax_rates or None, log_prob, raw_suffix)
         """
         messages = [
             {"role": "system", "content": system_prompt},
@@ -253,9 +257,16 @@ class PlannerPolicy:
             add_generation_prompt=True,
         )
 
-        inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.device)
+        # Force JSON prefix as part of the prompt
+        prompt_with_prefix = full_prompt + self.JSON_PREFIX
+        inputs = self.tokenizer(prompt_with_prefix, return_tensors="pt").to(self.device)
 
-        # Generate with temperature sampling
+        # CRITICAL: switch to eval mode for generation.
+        # Train mode + gradient checkpointing + LoRA dropout causes degeneration.
+        was_training = self.model.training
+        self.model.eval()
+
+        # Generate only the suffix (numeric values + closing brackets)
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -267,28 +278,41 @@ class PlannerPolicy:
                 pad_token_id=self.tokenizer.pad_token_id,
             )
 
-        # Decode response
-        generated_ids = outputs.sequences[0][inputs["input_ids"].shape[1]:]
-        response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        # Restore training mode
+        if was_training:
+            self.model.train()
 
-        # Compute log probability
+        # Decode suffix
+        generated_ids = outputs.sequences[0][inputs["input_ids"].shape[1]:]
+        raw_suffix = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        # Truncate at first '}' to prevent rambling
+        if '}' in raw_suffix:
+            raw_suffix = raw_suffix[:raw_suffix.index('}') + 1]
+
+        # Compute log probability of suffix
         log_prob = self._compute_log_prob(outputs.scores, generated_ids)
 
-        # Parse tax rates
-        tax_rates = self._parse_tax_rates(response)
+        # Reconstruct full JSON and parse
+        full_response = self.JSON_PREFIX + raw_suffix
+        tax_rates = self._parse_tax_rates(full_response)
 
-        return tax_rates, log_prob
+        if tax_rates is None:
+            print(f"  [DEBUG] Failed to parse forced-prefix output: '{raw_suffix}'")
+
+        return tax_rates, log_prob, raw_suffix
 
     def _compute_log_prob_batch_internal(
         self,
-        prompts_and_actions: List[Tuple[str, str, List[float]]],
+        prompts_and_suffixes: List[Tuple[str, str, str]],
         enable_grad: bool = True,
     ) -> torch.Tensor:
         """
-        Internal: compute log probabilities for a batch of actions.
+        Compute log probabilities for a batch of actions using forced JSON prefix.
 
         Args:
-            prompts_and_actions: List of (system_prompt, user_prompt, tax_rates) tuples
+            prompts_and_suffixes: List of (system_prompt, user_prompt, raw_suffix) tuples
+                where raw_suffix is the generated text after JSON_PREFIX
             enable_grad: Whether to enable gradient computation
 
         Returns:
@@ -297,8 +321,7 @@ class PlannerPolicy:
         batch_input_ids = []
         batch_response_lengths = []
 
-        # Tokenize all prompts and responses
-        for system_prompt, user_prompt, tax_rates in prompts_and_actions:
+        for system_prompt, user_prompt, raw_suffix in prompts_and_suffixes:
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -310,20 +333,19 @@ class PlannerPolicy:
                 add_generation_prompt=True,
             )
 
-            # Format expected response
-            expected_response = json.dumps({"tax_rates": [round(r, 3) for r in tax_rates]})
+            # Prompt includes forced JSON prefix
+            prompt_with_prefix = full_prompt + self.JSON_PREFIX
 
-            # Tokenize
-            prompt_ids = self.tokenizer(full_prompt, return_tensors="pt")["input_ids"]
-            response_ids = self.tokenizer(
-                expected_response, return_tensors="pt", add_special_tokens=False
+            # Tokenize prompt (with prefix) and suffix separately
+            prompt_ids = self.tokenizer(prompt_with_prefix, return_tensors="pt")["input_ids"]
+            suffix_ids = self.tokenizer(
+                raw_suffix, return_tensors="pt", add_special_tokens=False
             )["input_ids"]
 
-            # Concatenate
-            input_ids = torch.cat([prompt_ids, response_ids], dim=1).squeeze(0)
+            input_ids = torch.cat([prompt_ids, suffix_ids], dim=1).squeeze(0)
 
             batch_input_ids.append(input_ids)
-            batch_response_lengths.append(response_ids.shape[1])
+            batch_response_lengths.append(suffix_ids.shape[1])
 
         # Pad to same length
         max_len = max(ids.shape[0] for ids in batch_input_ids)
@@ -388,33 +410,24 @@ class PlannerPolicy:
 
     def compute_log_prob_batch(
         self,
-        prompts_and_actions: List[Tuple[str, str, List[float]]],
+        prompts_and_suffixes: List[Tuple[str, str, str]],
     ) -> torch.Tensor:
-        """
-        Compute log probabilities for a batch of actions (with gradients for training).
+        """Compute log probs with gradients for training.
 
         Args:
-            prompts_and_actions: List of (system_prompt, user_prompt, tax_rates) tuples
-
-        Returns:
-            Tensor of log probabilities, shape (batch_size,)
+            prompts_and_suffixes: List of (system_prompt, user_prompt, raw_suffix) tuples
         """
-        return self._compute_log_prob_batch_internal(prompts_and_actions, enable_grad=True)
+        return self._compute_log_prob_batch_internal(prompts_and_suffixes, enable_grad=True)
 
     def compute_ref_log_prob_batch(
         self,
-        prompts_and_actions: List[Tuple[str, str, List[float]]],
+        prompts_and_suffixes: List[Tuple[str, str, str]],
     ) -> torch.Tensor:
-        """
-        Compute log probs from frozen base model (LoRA disabled).
-
-        Temporarily disables LoRA adapter layers to get reference log probs
-        from the original pretrained model, for KL penalty computation.
-        """
+        """Compute log probs from frozen base model (LoRA disabled) for KL penalty."""
         self.model.disable_adapter_layers()
         with torch.no_grad():
             ref_log_probs = self._compute_log_prob_batch_internal(
-                prompts_and_actions, enable_grad=False
+                prompts_and_suffixes, enable_grad=False
             )
         self.model.enable_adapter_layers()
         return ref_log_probs
@@ -701,15 +714,16 @@ class REINFORCETrainer:
             obs = self.env.get_observation()
             sys_prompt, user_prompt = self._format_observation(obs, self.baseline_swf)
 
-            # Sample planner action
-            tax_rates, log_prob = self.policy.sample_action(sys_prompt, user_prompt)
+            # Sample planner action (with forced JSON prefix)
+            tax_rates, log_prob, raw_suffix = self.policy.sample_action(sys_prompt, user_prompt)
             format_success = tax_rates is not None
 
             if not tax_rates:
                 # Fallback to uniform moderate rates
                 tax_rates = [0.15] * num_b
+                raw_suffix = ", ".join(str(r) for r in tax_rates) + "]}"
                 log_prob = -10.0
-                print(f"  [WARNING] Rollout {r_idx}: Failed to parse JSON, using fallback rates")
+                print(f"  [WARNING] Rollout {r_idx}: Failed to parse, using fallback rates")
 
             # Run rollout: same rates each tax year
             rates_per_year = [tax_rates] * self.config.num_tax_years
@@ -719,6 +733,7 @@ class REINFORCETrainer:
                 'system_prompt': sys_prompt,
                 'user_prompt': user_prompt,
                 'tax_rates': tax_rates,
+                'raw_suffix': raw_suffix,
                 'log_prob': log_prob,
                 'final_swf': final_swf,
                 'swf_trajectory': swf_trajectory,
@@ -729,11 +744,14 @@ class REINFORCETrainer:
         return rollouts
 
     def train_step(self, rollouts: List[Dict[str, Any]], iter_num: int) -> Dict[str, float]:
-        """REINFORCE policy gradient step.
+        """REINFORCE policy gradient step with positive-only advantages.
 
-        Uses gradient accumulation over individual samples to avoid holding
-        all computation graphs in memory simultaneously. Each sample requires
-        one forward+backward pass through the planner (~2s on A6000).
+        Key stability features:
+        - Forced JSON prefix (handled in PlannerPolicy) prevents format collapse
+        - Positive-only advantages: only reinforce good actions, never push model
+          away from valid outputs (which can corrupt formatting)
+        - KL penalty anchors near base model
+        - Per-sample gradient accumulation for memory efficiency
         """
         self.policy.model.train()
 
@@ -749,6 +767,7 @@ class REINFORCETrainer:
                 'loss/entropy': 0.0,
                 'advantage/mean': 0.0,
                 'advantage/std': 0.0,
+                'grad_norm': 0.0,
                 'lr': self.scheduler.get_last_lr()[0],
             }
 
@@ -761,8 +780,14 @@ class REINFORCETrainer:
         if rewards.std() > 1e-8:
             advantages = advantages / (rewards.std() + 1e-8)
 
-        prompts_and_actions = [
-            (r['system_prompt'], r['user_prompt'], r['tax_rates'])
+        # Positive-only advantages: only reinforce above-average actions.
+        # This prevents pushing the model AWAY from specific token sequences,
+        # which is what causes format collapse in standard REINFORCE.
+        advantages = torch.clamp(advantages, min=0.0)
+
+        # Use raw_suffix for exact token-level consistency with generation
+        prompts_and_suffixes = [
+            (r['system_prompt'], r['user_prompt'], r['raw_suffix'])
             for r in valid
         ]
 
@@ -776,7 +801,7 @@ class REINFORCETrainer:
 
         # Process each sample individually: forward + backward, accumulate grads
         for i in range(n):
-            pa = prompts_and_actions[i]
+            pa = prompts_and_suffixes[i]
             adv = advantages[i]
 
             # Forward with gradients
@@ -798,6 +823,13 @@ class REINFORCETrainer:
 
         t1 = time.time()
 
+        # Compute gradient norm before clipping
+        grad_norm = 0.0
+        for p in self.policy.model.parameters():
+            if p.grad is not None:
+                grad_norm += p.grad.data.norm(2).item() ** 2
+        grad_norm = grad_norm ** 0.5
+
         if self.config.clip_grad > 0:
             torch.nn.utils.clip_grad_norm_(
                 self.policy.model.parameters(), self.config.clip_grad
@@ -806,7 +838,11 @@ class REINFORCETrainer:
         self.optimizer.step()
         self.scheduler.step()
 
-        print(f"  [TIMING] train_step={t1-t0:.1f}s ({n} samples, {(t1-t0)/n:.1f}s/sample)", flush=True)
+        print(
+            f"  [TIMING] train_step={t1-t0:.1f}s ({n} samples, {(t1-t0)/n:.1f}s/sample) "
+            f"grad_norm={grad_norm:.4f}",
+            flush=True,
+        )
 
         return {
             'loss/total': total_pg / n + self.config.kl_coef * total_kl / n - self.config.entropy_coef * total_ent / n,
@@ -815,6 +851,7 @@ class REINFORCETrainer:
             'loss/entropy': total_ent / n,
             'advantage/mean': advantages.mean().item(),
             'advantage/std': advantages.std().item(),
+            'grad_norm': grad_norm,
             'lr': self.scheduler.get_last_lr()[0],
         }
 
