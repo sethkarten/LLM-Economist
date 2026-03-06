@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import time
+import uuid
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import numpy as np
@@ -92,6 +93,9 @@ class AsyncLLMEconomist:
         swf_weighting: str = "rawlsian",
         history_len: int = 50,
         bracket_setting: str = "three",
+        external_planner: bool = False,
+        fixed_skills: Optional[List[float]] = None,
+        fixed_personas: Optional[Dict[str, str]] = None,
     ):
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
@@ -108,6 +112,14 @@ class AsyncLLMEconomist:
         self.swf_weighting = swf_weighting
         self.history_len = history_len
         self.bracket_setting = bracket_setting
+        self.external_planner = external_planner
+
+        # Unique instance ID to prevent request ID collisions when sharing a vLLM engine
+        self._instance_id = uuid.uuid4().hex[:8]
+
+        # Fixed population (injected from outside for RL training)
+        self._fixed_skills = fixed_skills
+        self._fixed_personas = fixed_personas
 
         # Set seeds
         np.random.seed(seed)
@@ -169,19 +181,27 @@ class AsyncLLMEconomist:
         )
         await self.engine.initialize()
 
-        # Generate personas
-        logger.info("Generating population-aligned personas...")
-        self.personas = generate_aligned_personas(
-            self.num_agents,
-            use_llm_narratives=False,  # Faster without LLM narratives
-            seed=self.seed,
-        )
+        # Generate or use fixed personas
+        if self._fixed_personas is not None:
+            logger.info("Using fixed (injected) personas for RL training")
+            self.personas = self._fixed_personas
+        else:
+            logger.info("Generating population-aligned personas...")
+            self.personas = generate_aligned_personas(
+                self.num_agents,
+                use_llm_narratives=False,  # Faster without LLM narratives
+                seed=self.seed,
+            )
 
-        # Initialize agent states
+        # Initialize agent states with fixed or sampled skills
         logger.info("Initializing agent states...")
-        skills = self._sample_skills()
-        agent_states = []
+        if self._fixed_skills is not None:
+            skills = self._fixed_skills
+        else:
+            skills = self._sample_skills()
+        self._initial_skills = skills  # Store for reset_state()
 
+        agent_states = []
         persona_ids = list(self.personas.keys())
         for i in range(self.num_agents):
             persona_id = persona_ids[i % len(persona_ids)]
@@ -212,6 +232,36 @@ class AsyncLLMEconomist:
         )
 
         logger.info(f"Initialization complete. Ready to simulate {self.num_agents} agents for {self.max_timesteps} steps.")
+
+    def set_tax_rates(self, rates: List[float]):
+        """Set tax rates externally (for RL training). Bypasses planner LLM call."""
+        if len(rates) != len(self.state.tax_rates):
+            raise ValueError(f"Expected {len(self.state.tax_rates)} rates, got {len(rates)}")
+        self.state.tax_rates = [max(0.0, min(0.99, float(r))) for r in rates]
+
+    def reset_state(self):
+        """Reset agent states to initial conditions without reinitializing vLLM or personas.
+
+        Enables reuse across RL rollouts: same population, fresh economic state.
+        """
+        from llm_economist.utils.bracket import get_num_brackets
+        num_b = get_num_brackets(self.bracket_setting)
+
+        for agent in self.state.agent_states:
+            agent.labor = 40.0
+            agent.income = agent.skill * 40.0
+            agent.post_tax_income = 0.0
+            agent.utility = 0.0
+            agent.tax_paid = 0.0
+            agent.history = []
+
+        self.state.timestep = 0
+        self.state.tax_rates = [0.15] * num_b
+        self.state.total_tax_collected = 0.0
+        self.state.rebate_per_agent = 0.0
+        self.state.swf = 0.0
+        self.metrics_history = []
+        self.planner_history = []
 
     def _sample_skills(self) -> List[float]:
         """Sample skills from GB2 distribution (US income calibrated)."""
@@ -390,8 +440,8 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
 
         start_time = time.time()
 
-        # Step 1: Update tax rates if new tax year
-        if is_tax_year_start and timestep > 0:
+        # Step 1: Update tax rates if new tax year (skip if external planner controls rates)
+        if is_tax_year_start and timestep > 0 and not self.external_planner:
             await self._update_tax_rates(timestep)
 
         # Step 2: Batch worker decisions
@@ -484,7 +534,7 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
             batch_end = min(batch_start + self.batch_size, self.num_agents)
 
             batch = BatchRequest(
-                request_ids=[f"worker_{i}" for i in range(batch_start, batch_end)],
+                request_ids=[f"{self._instance_id}_worker_{i}" for i in range(batch_start, batch_end)],
                 prompts=user_prompts[batch_start:batch_end],
                 system_prompts=system_prompts[batch_start:batch_end],
                 temperatures=[0.7] * (batch_end - batch_start),
@@ -587,8 +637,8 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
                 swf += agent.utility
             else:
                 # rawlsian: weight by inverse pre-tax income (1/z)
-                if agent.income > 0:
-                    swf += agent.utility / agent.income
+                # Floor income at $1000 to prevent extreme ratios from GB2 left-tail draws
+                swf += agent.utility / max(agent.income, 1000.0)
 
         self.state.swf = swf
 
@@ -715,6 +765,7 @@ async def main_async(args):
         swf_weighting=args.swf_weighting,
         history_len=args.history_len,
         bracket_setting=args.bracket_setting,
+        external_planner=args.external_planner,
     )
 
     await simulator.initialize()
@@ -783,6 +834,10 @@ def create_argument_parser():
     parser.add_argument('--swf-weighting', default='rawlsian',
                        choices=['rawlsian', 'utilitarian'],
                        help='Social welfare function weighting scheme')
+
+    # External planner (for RL training)
+    parser.add_argument('--external-planner', action='store_true',
+                       help='Skip LLM planner calls; tax rates set externally (for RL training)')
 
     # Utility
     parser.add_argument('--estimate-time', action='store_true',
