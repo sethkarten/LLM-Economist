@@ -498,9 +498,11 @@ class RolloutEnvironment:
         self,
         config: TrainingConfig,
         population: FixedPopulation,
+        worker_gpu: Optional[str] = None,
     ):
         self.config = config
         self.population = population
+        self.worker_gpu = worker_gpu  # Physical GPU ID for vLLM (e.g. "1")
         self.sim = None
 
     async def initialize(self):
@@ -508,6 +510,14 @@ class RolloutEnvironment:
         from llm_economist.main_async import AsyncLLMEconomist
 
         total_steps = self.config.tax_year_length * self.config.num_tax_years
+
+        # In 2-GPU mode, restrict vLLM to the worker GPU so it doesn't collide
+        # with the planner on GPU 0. vLLM always uses cuda:0, so we make the
+        # worker GPU the only visible device for the spawned engine process.
+        original_cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if self.worker_gpu is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = self.worker_gpu
+            print(f"[RolloutEnv] Set CUDA_VISIBLE_DEVICES={self.worker_gpu} for vLLM worker engine")
 
         self.sim = AsyncLLMEconomist(
             num_agents=self.config.num_agents,
@@ -525,6 +535,14 @@ class RolloutEnvironment:
             bracket_setting=self.config.bracket_setting,
         )
         await self.sim.initialize()
+
+        # Restore original CUDA_VISIBLE_DEVICES so planner can still use GPU 0
+        if self.worker_gpu is not None:
+            if original_cuda_visible is not None:
+                os.environ["CUDA_VISIBLE_DEVICES"] = original_cuda_visible
+            else:
+                del os.environ["CUDA_VISIBLE_DEVICES"]
+            print(f"[RolloutEnv] Restored CUDA_VISIBLE_DEVICES={original_cuda_visible}")
 
     async def run_rollout(
         self,
@@ -621,7 +639,9 @@ class REINFORCETrainer:
         print(f"Scheduler: Linear warmup ({warmup_steps} steps) + Cosine decay")
 
         # Create rollout environment (single env reused across rollouts)
-        self.env = RolloutEnvironment(self.config, self.population)
+        # In 2-GPU mode, assign vLLM to the second visible GPU
+        worker_gpu = str(visible_gpus[1]) if use_2gpu else None
+        self.env = RolloutEnvironment(self.config, self.population, worker_gpu=worker_gpu)
         await self.env.initialize()
 
         # Compute US Federal baseline SWF
