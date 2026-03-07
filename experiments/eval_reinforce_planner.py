@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel, LoraConfig, get_peft_model
+from peft import PeftModel, LoraConfig, get_peft_model  # noqa: F401
 
 
 # Reuse prompt templates from training
@@ -58,28 +58,29 @@ def load_planner(checkpoint_path: str, base_model: str = "google/gemma-3-4b-it",
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        torch_dtype=torch.bfloat16,
-        device_map={"": device},
-    )
-
-    # Apply LoRA config matching training
-    lora_config = LoraConfig(
-        r=8, lora_alpha=8, lora_dropout=0.0,
-        target_modules=["gate_proj", "up_proj", "down_proj"],
-        bias="none", task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, lora_config)
-
-    # Load trained weights
     checkpoint = Path(checkpoint_path)
-    if checkpoint.exists():
-        state_dict = torch.load(checkpoint / "adapter_model.bin", map_location=device, weights_only=True)
-        model.load_state_dict(state_dict, strict=False)
+    if checkpoint.exists() and (checkpoint / "adapter_config.json").exists():
+        # Load base model then apply saved LoRA adapter
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=torch.bfloat16,
+            device_map={"": device},
+        )
+        model = PeftModel.from_pretrained(model, str(checkpoint))
         print(f"Loaded LoRA weights from {checkpoint}")
     else:
-        print(f"WARNING: Checkpoint not found at {checkpoint}, using base model")
+        print(f"WARNING: Checkpoint not found at {checkpoint}, using base model with fresh LoRA")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=torch.bfloat16,
+            device_map={"": device},
+        )
+        lora_config = LoraConfig(
+            r=8, lora_alpha=8, lora_dropout=0.0,
+            target_modules=["gate_proj", "up_proj", "down_proj"],
+            bias="none", task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, lora_config)
 
     model.eval()
     return model, tokenizer
