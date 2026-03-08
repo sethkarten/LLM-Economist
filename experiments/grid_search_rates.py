@@ -97,6 +97,7 @@ async def main_async(args):
         external_planner=True,
         bracket_setting="three",
         gpu_memory_utilization=0.95,
+        history_len=args.history_len,
     )
     await sim.initialize()
 
@@ -161,6 +162,8 @@ def main():
                         help='Steps per schedule (256=2 tax years, ~15min each)')
     parser.add_argument('--tax-year-length', type=int, default=128)
     parser.add_argument('--worker-model', type=str, default='Qwen/Qwen3-8B-AWQ')
+    parser.add_argument('--history-len', type=int, default=5,
+                        help='Number of recent timesteps to include in worker prompts')
     parser.add_argument('--worker-gpu', type=str, default=None)
     parser.add_argument('--output', type=str, default=None)
     args = parser.parse_args()
