@@ -97,7 +97,9 @@ class AsyncLLMEconomist:
         fixed_skills: Optional[List[float]] = None,
         fixed_personas: Optional[Dict[str, str]] = None,
         gpu_memory_utilization: Optional[float] = None,
+        max_model_len: int = 4096,
     ):
+        self.max_model_len = max_model_len
         self.num_agents = num_agents
         self.max_timesteps = max_timesteps
         self.model_name = model_name
@@ -173,7 +175,7 @@ class AsyncLLMEconomist:
             model_name=model_config.hf_name,
             tensor_parallel_size=self.tensor_parallel_size,
             quantization=quant_value,
-            max_model_len=4096,  # Worker prompts are ~500 tokens; 4K is plenty
+            max_model_len=self.max_model_len,
             enable_prefix_caching=True,
             enable_chunked_prefill=True,
             kv_cache_dtype="auto",  # Auto for better Blackwell compatibility
@@ -277,30 +279,140 @@ class AsyncLLMEconomist:
         return skills
 
     def _build_worker_prompt(self, agent: AgentState, timestep: int) -> tuple:
-        """Build system and user prompts for a worker agent."""
-        system_prompt = f"""You are an economic agent in a tax simulation.
-{agent.persona_prompt}
+        """Build system and user prompts for a worker agent.
 
-Your goal is to maximize your utility by choosing how many hours to work per week.
-Utility = post_tax_income + rebate - cost_of_labor
-where cost_of_labor increases with hours worked.
+        Mirrors the rich prompt from worker.py including bracket explanation,
+        effective tax rate, historical context, running averages, labor
+        direction nudge, and exploration/exploitation instructions.
+        """
+        from llm_economist.utils.bracket import get_bracket_prompt
 
-Current tax brackets: {self.state.tax_brackets}
-Current tax rates: {[f"{r*100:.1f}%" for r in self.state.tax_rates]}
-"""
+        # --- Bracket explanation ---
+        bracket_prompt, _ = get_bracket_prompt(self.bracket_setting)
 
-        user_prompt = f"""Timestep {timestep}:
-Your skill level (hourly wage): ${agent.skill:.2f}
-Your current labor hours: {agent.labor:.0f}
-Your current pre-tax income: ${agent.income:.2f}
-Your last post-tax income + rebate: ${agent.post_tax_income:.2f}
-Your last utility: {agent.utility:.2f}
+        # --- Effective tax rate at current income ---
+        if agent.income > 0:
+            effective_rate = agent.tax_paid / agent.income * 100
+        else:
+            effective_rate = 0.0
 
-Choose your labor hours for this period (0-100).
-Consider the tax rates and your preferences.
+        # --- Bracket-by-bracket breakdown ---
+        bracket_detail_lines = []
+        prev = 0
+        for bracket_upper, rate in zip(self.state.tax_brackets[1:], self.state.tax_rates):
+            if bracket_upper >= 10_000_000:
+                bracket_detail_lines.append(f"  ${prev:,.0f}+  taxed at {rate*100:.1f}%")
+            else:
+                bracket_detail_lines.append(f"  ${prev:,.0f}–${bracket_upper:,.0f}  taxed at {rate*100:.1f}%")
+            prev = bracket_upper
+        bracket_detail = "\n".join(bracket_detail_lines)
 
-Respond with JSON: {{"labor_hours": <number>, "reasoning": "<brief explanation>"}}
-"""
+        system_prompt = (
+            f"You are {agent.name}, a citizen of Princetonia. "
+            f"Your skill level is {agent.skill:.2f} with an expected income of "
+            f"{agent.skill * 40:.2f} at 40 hours of labor each week.\n"
+            f"{agent.persona_prompt}\n"
+            "Each year you will have the option to choose the number of hours of "
+            "labor to perform each week. You can work overtime (>40 hours per week) "
+            "or undertime (<40 hours per week). You will receive income z proportional "
+            "to the number of hours worked and your skill level.\n"
+            "Your goal is to maximize your isoelastic utility.\n"
+            "Utility u = post_tax_income + rebate - 0.0005 * labor^3.5\n"
+            "where post_tax_income = income - tax, and income = skill * labor.\n"
+            "Use the JSON format: {\"labor_hours\": X} and replace X with your answer.\n"
+        )
+
+        # --- Historical context ---
+        history_text = ""
+        if agent.history:
+            K = min(self.history_len, len(agent.history))
+            recent = agent.history[-K:]
+            history_text = "Historical data:\n"
+            for entry in recent:
+                rates_str = [f"{r*100:.1f}%" for r in entry['tax_rates']]
+                history_text += (
+                    f"Timestep {entry['timestep']}: "
+                    f"TAX={rates_str}, "
+                    f"skill s={agent.skill:.2f}, "
+                    f"LABOR l={entry['labor']:.0f}, "
+                    f"pre-tax income z={entry['income']:.2f}, "
+                    f"tax_i={entry['tax_paid']:.2f}, "
+                    f"rebate={entry.get('rebate', 0):.2f}, "
+                    f"post-tax income z~={entry['post_tax_income']:.2f}, "
+                    f"utility u={entry['utility']:.2f}\n"
+                )
+
+        # --- Running averages ---
+        avg_text = ""
+        if agent.history:
+            K = min(self.history_len, len(agent.history))
+            recent = agent.history[-K:]
+            avg_labor = round(np.mean([e['labor'] for e in recent]), -1)
+            avg_utility = np.mean([e['utility'] for e in recent])
+            avg_text = (
+                f"The running average LABOR choice historically was average "
+                f"LABOR={avg_labor:.0f} hours corresponding to average utility "
+                f"u={avg_utility:.2f}. "
+            )
+
+        # --- Labor direction nudge ---
+        nudge_text = ""
+        if len(agent.history) >= 2:
+            prev_entry = agent.history[-2]
+            curr_entry = agent.history[-1]
+            if curr_entry['labor'] != prev_entry['labor']:
+                delta_l = curr_entry['labor'] - prev_entry['labor']
+                delta_l_msg = 'Increasing' if delta_l > 0 else 'Decreasing'
+                delta_u = curr_entry['utility'] - prev_entry['utility']
+                delta_u_msg = 'increased' if delta_u > 0 else 'decreased'
+                if (delta_l > 0 and delta_u < 0) or (delta_l < 0 and delta_u > 0):
+                    labor_action = f"too high and needs to be decreased below labor l={curr_entry['labor']:.0f}"
+                elif (delta_l > 0 and delta_u > 0) or (delta_l < 0 and delta_u < 0):
+                    labor_action = f"too low and needs to be increased above labor l={curr_entry['labor']:.0f}"
+                else:
+                    labor_action = "at a reasonable level"
+                nudge_text = (
+                    f"{delta_l_msg} labor {delta_u_msg} utility. "
+                    f"This implies labor l is {labor_action}.\n"
+                )
+
+        # --- Exploration vs exploitation ---
+        exploration_pct = 0.9
+        if timestep > exploration_pct * self.max_timesteps:
+            explore_text = "Choose your best amount of LABOR to perform."
+        else:
+            explore_text = (
+                "Use the historical data to influence your answer in order to "
+                "maximize utility u, while balancing exploration and exploitation "
+                "by choosing varying amounts of LABOR. "
+            )
+
+        # --- Tax impact example ---
+        example_hours = [20, 40, 60, 80]
+        example_lines = []
+        for h in example_hours:
+            gross = agent.skill * h
+            tax = self._calculate_tax(gross)
+            net = gross - tax + self.state.rebate_per_agent
+            cost = 0.0005 * (h ** 3.5)
+            u = net - cost
+            example_lines.append(f"  {h}h → income=${gross:.0f}, tax=${tax:.0f}, net=${net:.0f}, cost={cost:.0f}, utility={u:.1f}")
+        examples = "\n".join(example_lines)
+
+        user_prompt = (
+            f"{history_text}"
+            f"{nudge_text}"
+            f"Timestep {timestep}:\n"
+            f"{bracket_prompt}\n"
+            f"Current tax schedule:\n{bracket_detail}\n"
+            f"Your effective tax rate: {effective_rate:.1f}%\n"
+            f"skill: s = {agent.skill:.2f}\n"
+            f"{avg_text}\n"
+            f"If you worked different hours at current tax rates:\n{examples}\n\n"
+            f"Next year, you may perform LABOR: [0,10,20,30,40,50,60,70,80,90,100] hours. "
+            f"{explore_text}\n"
+            f"Respond with JSON: {{\"labor_hours\": <number>}}\n"
+        )
         return system_prompt, user_prompt
 
     def _build_planner_prompt(self, timestep: int, worker_stats: List[Dict]) -> tuple:
@@ -479,6 +591,19 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         self._apply_taxes()
         self._calculate_utilities()
 
+        # Step 4b: Record per-agent history for worker prompt context
+        for agent in self.state.agent_states:
+            agent.history.append({
+                'timestep': timestep,
+                'tax_rates': list(self.state.tax_rates),
+                'labor': agent.labor,
+                'income': agent.income,
+                'tax_paid': agent.tax_paid,
+                'rebate': self.state.rebate_per_agent,
+                'post_tax_income': agent.post_tax_income,
+                'utility': agent.utility,
+            })
+
         # Step 5: Log metrics
         step_time = time.time() - start_time
         metrics = self._collect_metrics(timestep, step_time)
@@ -630,8 +755,8 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         """Calculate utilities for all agents."""
         # Isoelastic utility: u = z_tilde - c * l^delta
         # where z_tilde = post_tax_income, l = labor, c = cost coeff, delta = elasticity
-        c = 0.01
-        delta = 2.0
+        c = 0.0005
+        delta = 3.5
 
         swf = 0.0
         for agent in self.state.agent_states:
@@ -771,6 +896,7 @@ async def main_async(args):
         history_len=args.history_len,
         bracket_setting=args.bracket_setting,
         external_planner=args.external_planner,
+        max_model_len=args.max_model_len,
     )
 
     await simulator.initialize()
@@ -843,6 +969,8 @@ def create_argument_parser():
     # External planner (for RL training)
     parser.add_argument('--external-planner', action='store_true',
                        help='Skip LLM planner calls; tax rates set externally (for RL training)')
+    parser.add_argument('--max-model-len', type=int, default=4096,
+                       help='Max model sequence length for vLLM (increase for ICRL with long history)')
 
     # Utility
     parser.add_argument('--estimate-time', action='store_true',
