@@ -31,7 +31,8 @@ from peft import PeftModel, LoraConfig, get_peft_model  # noqa: F401
 # Reuse prompt templates from training
 PLANNER_SYSTEM_PROMPT = """You are a tax policy planner for an economy with {num_agents} workers.
 Your goal is to set {num_brackets} marginal tax bracket rates (each 0-100%) to maximize social welfare.
-Workers respond to tax rates by choosing how many hours to work.
+Workers respond to tax rates by choosing how many hours to work (0-100).
+Utility = post_tax_income + rebate - 0.0005 * labor^3.5
 Higher taxes fund redistribution but may reduce work incentives.
 Respond ONLY with a JSON object: {{"tax_rates": [rate1, rate2, ...]}} where rates are percentages (0-100).
 Tax brackets: {brackets}"""

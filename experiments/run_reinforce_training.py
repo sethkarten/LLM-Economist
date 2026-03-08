@@ -69,7 +69,7 @@ PLANNER_SYSTEM_PROMPT = """You are an AI tax policy planner in an economic simul
 
 Social welfare function (rawlsian):
   SWF = sum( utility_i / max(income_i, $1000) ) for all workers
-  utility_i = post_tax_income_i + rebate - 0.01 * labor_hours_i^2
+  utility_i = post_tax_income_i + rebate - 0.0005 * labor_hours_i^3.5
 
 Your goal: Set marginal tax rates for {num_brackets} brackets to maximize SWF.
 
