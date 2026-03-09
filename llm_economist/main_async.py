@@ -31,6 +31,7 @@ from .inference.config import (
 from .agents.persona_generator import (
     PopulationAlignedPersonaGenerator, generate_aligned_personas, Persona
 )
+from .agents.worker import ROLE_MESSAGES, PERSONAS, PERSONA_PERCENTS, distribute_fixed_personas
 from .utils.common import rGB2
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ class AgentState:
     utility: float
     tax_paid: float
     persona_prompt: str
+    role: str  # Persona role name (e.g. 'entrepreneur', 'teacher')
     utility_type: str  # egotistical, altruistic, adversarial
     history: List[Dict]
     satisfaction: float = 1.0  # Tax policy satisfaction (1.0=YES, 0.5=NO)
@@ -194,13 +196,18 @@ class AsyncLLMEconomist:
         if self._fixed_personas is not None:
             logger.info("Using fixed (injected) personas for RL training")
             self.personas = self._fixed_personas
+            self._persona_roles = None  # RL training uses custom personas
         else:
-            logger.info("Generating population-aligned personas...")
-            self.personas = generate_aligned_personas(
-                self.num_agents,
-                use_llm_narratives=False,  # Faster without LLM narratives
-                seed=self.seed,
-            )
+            # Use original hand-crafted ROLE_MESSAGES personas from worker.py
+            # These have strong, explicit tax opinions that drive realistic elasticity
+            logger.info("Assigning original rich personas (ROLE_MESSAGES)...")
+            np.random.seed(self.seed)
+            role_list = distribute_fixed_personas(self.num_agents)
+            self._persona_roles = role_list  # Store for reset
+            # Build persona dict mapping index to full description
+            self.personas = {}
+            for i, role in enumerate(role_list):
+                self.personas[i] = ROLE_MESSAGES[role]
 
         # Initialize agent states with fixed or sampled skills
         logger.info("Initializing agent states...")
@@ -211,9 +218,16 @@ class AsyncLLMEconomist:
         self._initial_skills = skills  # Store for reset_state()
 
         agent_states = []
-        persona_ids = list(self.personas.keys())
         for i in range(self.num_agents):
-            persona_id = persona_ids[i % len(persona_ids)]
+            if self._persona_roles is not None:
+                role = self._persona_roles[i]
+                persona_prompt = ROLE_MESSAGES[role]
+            else:
+                # RL training path: use injected personas
+                persona_ids = list(self.personas.keys())
+                persona_id = persona_ids[i % len(persona_ids)]
+                role = 'default'
+                persona_prompt = self.personas[persona_id]
             state = AgentState(
                 id=i,
                 name=f"worker_{i}",
@@ -223,7 +237,8 @@ class AsyncLLMEconomist:
                 post_tax_income=0.0,
                 utility=0.0,
                 tax_paid=0.0,
-                persona_prompt=self.personas[persona_id],
+                persona_prompt=persona_prompt,
+                role=role,
                 utility_type='egotistical',  # Default
                 history=[],
             )
@@ -324,6 +339,8 @@ class AsyncLLMEconomist:
             "Isoelastic utility u~ = z~ - 0.0005 * labor^3.5\n"
             "where z~ = income - tax + rebate (post-tax income), and income = skill * labor.\n"
             "Your satisfaction r with tax policy (YES=1.0, NO=0.5) adjusts utility: u = r * u~.\n"
+            "Higher tax rates mean less take-home pay per hour worked, so you may want to work fewer hours.\n"
+            "Lower tax rates mean more take-home pay per hour, making additional work more rewarding.\n"
             "Make sure to sufficiently explore different amounts of LABOR before exploiting "
             "the best one for maximum utility u.\n"
             "Use the JSON format: {\"labor_hours\": X} and replace X with your answer.\n"
@@ -423,16 +440,34 @@ class AsyncLLMEconomist:
                 "by choosing varying amounts of LABOR. "
             )
 
-        # --- Tax impact example ---
-        example_hours = [20, 40, 60, 80]
-        example_lines = []
-        for h in example_hours:
+        # --- Marginal tax analysis ---
+        # Show workers how taxes affect the return on additional labor
+        current_labor = max(agent.labor, 40)  # Use last labor or default
+        current_income = agent.skill * current_labor
+        marginal_rate = self._get_marginal_rate(current_income)
+        net_per_hour = agent.skill * (1 - marginal_rate)
+
+        marginal_text = (
+            f"At your current income of ${current_income:,.0f}, your marginal tax rate is {marginal_rate*100:.0f}%.\n"
+            f"Each additional hour of work earns ${agent.skill:.0f} pre-tax but only ${net_per_hour:.0f} after tax.\n"
+            f"Labor cost for one more hour: {0.0005 * 3.5 * current_labor**2.5:.1f}\n"
+        )
+
+        # Show take-home comparison at different hours
+        example_lines = ["Take-home analysis at current tax rates:"]
+        for h in [20, 40, 60, 80]:
             gross = agent.skill * h
             tax = self._calculate_tax(gross)
             net = gross - tax + self.state.rebate_per_agent
             cost = 0.0005 * (h ** 3.5)
             u = net - cost
-            example_lines.append(f"  {h}h → income=${gross:.0f}, tax=${tax:.0f}, net=${net:.0f}, cost={cost:.0f}, utility={u:.1f}")
+            # Marginal rate at this income level
+            mr = self._get_marginal_rate(gross)
+            take_home_per_hour = agent.skill * (1 - mr)
+            example_lines.append(
+                f"  {h}h: income=${gross:,.0f}, tax=${tax:,.0f} ({tax/max(gross,1)*100:.0f}% effective), "
+                f"take-home/hr=${take_home_per_hour:.0f}, labor_cost={cost:.0f}, utility={u:.0f}"
+            )
         examples = "\n".join(example_lines)
 
         user_prompt = (
@@ -444,7 +479,8 @@ class AsyncLLMEconomist:
             f"Your effective tax rate: {effective_rate:.1f}%\n"
             f"skill: s = {agent.skill:.2f}\n"
             f"{avg_text}\n"
-            f"If you worked different hours at current tax rates:\n{examples}\n\n"
+            f"{marginal_text}\n"
+            f"{examples}\n\n"
             f"Next year, you may perform LABOR: [0,10,20,30,40,50,60,70,80,90,100] hours. "
             f"{explore_text}\n"
             f"Respond with JSON: {{\"labor_hours\": <number>}}\n"
@@ -738,32 +774,33 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         user_prompts = []
 
         for agent in self.state.agent_states:
-            sys_prompt = (
-                f"You are {agent.name}, a citizen of Princetonia.\n"
-                f"{agent.persona_prompt}\n"
+            sys_prompt = ""  # Match worker.py: system_prompt is empty for satisfaction
+
+            # Build summary of this year's outcomes (matches worker.py message_history format)
+            year_summary = (
+                f"TAX: = {list(self.state.tax_rates)}\n"
+                f"skill: s = {agent.skill:.2f}\n"
+                f"LABOR: = l {agent.labor:.0f}\n"
+                f"income: z = s * l = {agent.income:.2f}\n"
+                f"tax_i = {agent.tax_paid:.2f}\n"
+                f"rebate = {self.state.rebate_per_agent:.2f}\n"
+                f"post-tax income: z~ = z - tax_i + rebate = {agent.post_tax_income:.2f}\n"
+                f"isoelastic utility: u~ = z~ - c * l^d = {agent.utility:.2f}\n"
             )
 
-            # Build summary of this year's outcomes
-            year_summary = (
-                f"This year's summary:\n"
-                f"  skill s = {agent.skill:.2f}\n"
-                f"  labor l = {agent.labor:.0f} hours\n"
-                f"  pre-tax income z = ${agent.income:.2f}\n"
-                f"  tax paid = ${agent.tax_paid:.2f}\n"
-                f"  rebate received = ${self.state.rebate_per_agent:.2f}\n"
-                f"  post-tax income z~ = ${agent.post_tax_income:.2f}\n"
-                f"  effective tax rate = {(agent.tax_paid / max(agent.income, 1.0)) * 100:.1f}%\n"
-                f"  isoelastic utility u~ = {agent.utility:.2f}\n"
-            )
+            # Use the full ROLE_MESSAGES persona as prefix (matches worker.py line 425)
+            # This is the key mechanism that creates persona-specific tax responses
+            role_msg = agent.persona_prompt  # Full ROLE_MESSAGES text
 
             user_prompt = (
-                f"{year_summary}\n"
-                "Based on your summary of this year, are you satisfied with the "
-                "overall tax policy (including tax paid and rebate)?\n"
-                "Let's think step by step. Your thought should be no more than "
-                "4 sentences. Use the JSON format: "
-                '{\"thought\": \"<step-by-step-thinking>\", \"ANSWER\": \"X\"} '
-                'and replace \"X\" with \"YES\" or \"NO\".\n'
+                f"{role_msg}\n"
+                f"Based on your summary of this year:\n{year_summary}"
+                " are you satisfied with the overall tax policy "
+                "(including tax_i and rebate)?\n"
+                'Let\'s think step by step. Your thought should be no more than '
+                '4 sentences. Use the JSON format: '
+                '{"thought": "<step-by-step-thinking>", "ANSWER": "X"} '
+                'and replace "X" with "YES" or "NO".\n'
             )
 
             system_prompts.append(sys_prompt)
@@ -866,6 +903,13 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         # Add rebate to post-tax income
         for agent in self.state.agent_states:
             agent.post_tax_income += self.state.rebate_per_agent
+
+    def _get_marginal_rate(self, income: float) -> float:
+        """Get the marginal tax rate for a given income level."""
+        for i, bracket_upper in enumerate(self.state.tax_brackets[1:]):
+            if income <= bracket_upper:
+                return self.state.tax_rates[i]
+        return self.state.tax_rates[-1]
 
     def _calculate_tax(self, income: float) -> float:
         """Calculate tax for a given income using bracket rates."""
