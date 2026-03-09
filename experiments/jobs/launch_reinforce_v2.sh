@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
 #SBATCH --mem=128G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --output=/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/logs/reinforce_v2_%A.out
 #SBATCH --error=/scratch/gpfs/CHIJ/milkkarten/LLM-Economist/logs/reinforce_v2_%A.err
 
@@ -21,10 +21,8 @@ echo "Node: $(hostname)"
 echo "Start time: $(date)"
 echo "=================================================="
 
-# Environment setup
-module purge
-module load anaconda3/2024.10
-conda activate /home/sk9014/anaconda3/envs/llm
+# Environment setup — use uv venv, not conda
+export PATH="/home/sk9014/.local/bin:$PATH"
 
 # Offline mode for compute nodes (no internet)
 export HF_HOME=/scratch/gpfs/CHIJ/milkkarten/huggingface
@@ -43,7 +41,7 @@ cd /scratch/gpfs/CHIJ/milkkarten/LLM-Economist
 
 mkdir -p logs
 
-python experiments/run_reinforce_training.py \
+uv run python experiments/run_reinforce_training.py \
     --seed ${SEED} \
     --num-iterations 500 \
     --num-rollouts 16 \
