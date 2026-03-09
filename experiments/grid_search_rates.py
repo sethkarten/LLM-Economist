@@ -99,7 +99,7 @@ async def main_async(args):
         seed=args.seed,
         external_planner=True,
         bracket_setting="three",
-        gpu_memory_utilization=0.95,
+        gpu_memory_utilization=0.85,
         history_len=args.history_len,
     )
     await sim.initialize()
