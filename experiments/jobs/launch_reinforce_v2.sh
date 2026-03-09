@@ -43,11 +43,11 @@ mkdir -p logs
 
 uv run python experiments/run_reinforce_training.py \
     --seed ${SEED} \
-    --num-iterations 500 \
-    --num-rollouts 16 \
+    --num-iterations 200 \
+    --num-rollouts 8 \
     --num-agents 32 \
-    --tax-year-length 64 \
-    --num-tax-years 4 \
+    --tax-year-length 16 \
+    --num-tax-years 1 \
     --output-dir results/reinforce_v2_seed${SEED}
 
 echo "=================================================="
