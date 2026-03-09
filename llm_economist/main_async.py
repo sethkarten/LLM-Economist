@@ -332,8 +332,9 @@ class AsyncLLMEconomist:
             f"{agent.skill * 40:.2f} at 40 hours of labor each week.\n"
             f"{agent.persona_prompt}\n"
             "Each year you will have the option to choose the number of hours of "
-            "labor to perform each week. You can work overtime (>40 hours per week) "
-            "or undertime (<40 hours per week). You will receive income z proportional "
+            "labor to perform each week, from 0 to 100 hours. You can work overtime (>40 hours), "
+            "undertime (<40 hours), or choose not to work at all (0 hours) if taxes make "
+            "working not worth it. You will receive income z proportional "
             "to the number of hours worked and your skill level.\n"
             "Your goal is to maximize your adjusted utility.\n"
             "Isoelastic utility u~ = z~ - 0.0005 * labor^3.5\n"
@@ -343,6 +344,7 @@ class AsyncLLMEconomist:
             "Lower tax rates mean more take-home pay per hour, making additional work more rewarding.\n"
             "Make sure to sufficiently explore different amounts of LABOR before exploiting "
             "the best one for maximum utility u.\n"
+            "Choose LABOR from [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100] hours.\n"
             "Use the JSON format: {\"labor_hours\": X} and replace X with your answer.\n"
         )
 
