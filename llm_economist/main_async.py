@@ -320,9 +320,12 @@ class AsyncLLMEconomist:
             "labor to perform each week. You can work overtime (>40 hours per week) "
             "or undertime (<40 hours per week). You will receive income z proportional "
             "to the number of hours worked and your skill level.\n"
-            "Your goal is to maximize your isoelastic utility.\n"
-            "Utility u = post_tax_income + rebate - 0.0005 * labor^3.5\n"
-            "where post_tax_income = income - tax, and income = skill * labor.\n"
+            "Your goal is to maximize your adjusted utility.\n"
+            "Isoelastic utility u~ = z~ - 0.0005 * labor^3.5\n"
+            "where z~ = income - tax + rebate (post-tax income), and income = skill * labor.\n"
+            "Your satisfaction r with tax policy (YES=1.0, NO=0.5) adjusts utility: u = r * u~.\n"
+            "Make sure to sufficiently explore different amounts of LABOR before exploiting "
+            "the best one for maximum utility u.\n"
             "Use the JSON format: {\"labor_hours\": X} and replace X with your answer.\n"
         )
 
@@ -348,6 +351,22 @@ class AsyncLLMEconomist:
                     f"post-tax income z~={entry['post_tax_income']:.2f}, "
                     f"isoelastic u~={entry['utility']:.2f}, "
                     f"satisfaction r={satisfaction_str}, "
+                    f"adjusted utility u={adj_u:.2f}\n"
+                )
+
+            # Best N timesteps by adjusted utility (helps workers identify optimal labor)
+            sorted_history = sorted(
+                agent.history,
+                key=lambda x: x.get('adjusted_utility', x['utility']),
+                reverse=True,
+            )
+            best_n = min(5, len(sorted_history))
+            history_text += f"Best {best_n} timesteps:\n"
+            for entry in sorted_history[:best_n]:
+                adj_u = entry.get('adjusted_utility', entry['utility'])
+                history_text += (
+                    f"Timestep {entry['timestep']}: "
+                    f"LABOR l={entry['labor']:.0f}, "
                     f"adjusted utility u={adj_u:.2f}\n"
                 )
 
@@ -391,8 +410,11 @@ class AsyncLLMEconomist:
                 )
 
         # --- Exploration vs exploitation ---
-        exploration_pct = 0.9
-        if timestep > exploration_pct * self.max_timesteps:
+        # Switch to exploit at tax year boundaries or near end of simulation
+        # (matches worker.py's two-timescale coupling)
+        at_tax_year_end = (timestep + 1) % self.tax_year_length == 0
+        near_end = timestep > 0.9 * self.max_timesteps
+        if at_tax_year_end or near_end:
             explore_text = "Choose your best amount of LABOR to perform."
         else:
             explore_text = (
