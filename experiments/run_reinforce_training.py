@@ -547,6 +547,8 @@ class RolloutEnvironment:
             fixed_personas=self.population.personas,
             bracket_setting=self.config.bracket_setting,
             gpu_memory_utilization=gpu_mem_util,
+            history_len=5,
+            max_model_len=8192,
         )
         await self.sim.initialize()
 
