@@ -23,7 +23,7 @@ import numpy as np
 
 
 # Rate schedules to test (3-bracket: [low, mid, high])
-# Focused set: 15 schedules covering key questions
+# Focused set: 18 schedules covering progressive, regressive, flat, and U-shaped
 RATE_SCHEDULES = {
     # Baselines
     "us_federal":        [0.12, 0.24, 0.35],
@@ -42,8 +42,11 @@ RATE_SCHEDULES = {
     "u_shape_med":       [0.40, 0.20, 0.50],
     "u_shape_strong":    [0.50, 0.25, 0.60],
 
-    # Regressive (control: does the direction matter?)
+    # Regressive / decreasing from high (does direction matter?)
     "regressive":        [0.40, 0.30, 0.20],
+    "regressive_high":   [0.90, 0.75, 0.50],
+    "regressive_med":    [0.80, 0.60, 0.40],
+    "regressive_low":    [0.70, 0.50, 0.30],
 
     # Top-heavy (Saez-computed optimal for this SWF)
     "top_heavy":         [0.05, 0.10, 0.60],
