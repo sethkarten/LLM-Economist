@@ -50,6 +50,8 @@ class AgentState:
     persona_prompt: str
     utility_type: str  # egotistical, altruistic, adversarial
     history: List[Dict]
+    satisfaction: float = 1.0  # Tax policy satisfaction (1.0=YES, 0.5=NO)
+    adjusted_utility: float = 0.0  # utility * satisfaction
 
 
 @dataclass
@@ -260,6 +262,8 @@ class AsyncLLMEconomist:
             agent.post_tax_income = 0.0
             agent.utility = 0.0
             agent.tax_paid = 0.0
+            agent.satisfaction = 1.0
+            agent.adjusted_utility = 0.0
             agent.history = []
 
         self.state.timestep = 0
@@ -330,6 +334,9 @@ class AsyncLLMEconomist:
             history_text = "Historical data:\n"
             for entry in recent:
                 rates_str = [f"{r*100:.1f}%" for r in entry['tax_rates']]
+                satisfaction = entry.get('satisfaction', 1.0)
+                adj_u = entry.get('adjusted_utility', entry['utility'])
+                satisfaction_str = "YES" if satisfaction >= 1.0 else "NO"
                 history_text += (
                     f"Timestep {entry['timestep']}: "
                     f"TAX={rates_str}, "
@@ -339,23 +346,25 @@ class AsyncLLMEconomist:
                     f"tax_i={entry['tax_paid']:.2f}, "
                     f"rebate={entry.get('rebate', 0):.2f}, "
                     f"post-tax income z~={entry['post_tax_income']:.2f}, "
-                    f"utility u={entry['utility']:.2f}\n"
+                    f"isoelastic u~={entry['utility']:.2f}, "
+                    f"satisfaction r={satisfaction_str}, "
+                    f"adjusted utility u={adj_u:.2f}\n"
                 )
 
-        # --- Running averages ---
+        # --- Running averages (using adjusted utility) ---
         avg_text = ""
         if agent.history:
             K = min(self.history_len, len(agent.history))
             recent = agent.history[-K:]
             avg_labor = round(np.mean([e['labor'] for e in recent]), -1)
-            avg_utility = np.mean([e['utility'] for e in recent])
+            avg_utility = np.mean([e.get('adjusted_utility', e['utility']) for e in recent])
             avg_text = (
                 f"The running average LABOR choice historically was average "
-                f"LABOR={avg_labor:.0f} hours corresponding to average utility "
-                f"u={avg_utility:.2f}. "
+                f"LABOR={avg_labor:.0f} hours corresponding to average adjusted "
+                f"utility u={avg_utility:.2f}. "
             )
 
-        # --- Labor direction nudge ---
+        # --- Labor direction nudge (uses adjusted_utility to reflect tax satisfaction) ---
         nudge_text = ""
         if len(agent.history) >= 2:
             prev_entry = agent.history[-2]
@@ -363,7 +372,12 @@ class AsyncLLMEconomist:
             if curr_entry['labor'] != prev_entry['labor']:
                 delta_l = curr_entry['labor'] - prev_entry['labor']
                 delta_l_msg = 'Increasing' if delta_l > 0 else 'Decreasing'
-                delta_u = curr_entry['utility'] - prev_entry['utility']
+                # Use adjusted_utility (utility * satisfaction) for the nudge
+                # This way, if workers are unsatisfied with taxes, the utility
+                # signal reflects that dissatisfaction and guides labor adjustments
+                curr_u = curr_entry.get('adjusted_utility', curr_entry['utility'])
+                prev_u = prev_entry.get('adjusted_utility', prev_entry['utility'])
+                delta_u = curr_u - prev_u
                 delta_u_msg = 'increased' if delta_u > 0 else 'decreased'
                 if (delta_l > 0 and delta_u < 0) or (delta_l < 0 and delta_u > 0):
                     labor_action = f"too high and needs to be decreased below labor l={curr_entry['labor']:.0f}"
@@ -591,6 +605,11 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
         self._apply_taxes()
         self._calculate_utilities()
 
+        # Step 4a: Satisfaction assessment — workers evaluate tax policy
+        # This creates the feedback loop that makes workers respond to tax changes:
+        # satisfied=YES → r=1.0, satisfied=NO → r=0.5, adjusted_utility = utility * r
+        await self._batch_satisfaction_assessments(timestep)
+
         # Step 4b: Record per-agent history for worker prompt context
         for agent in self.state.agent_states:
             agent.history.append({
@@ -602,6 +621,8 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
                 'rebate': self.state.rebate_per_agent,
                 'post_tax_income': agent.post_tax_income,
                 'utility': agent.utility,
+                'satisfaction': agent.satisfaction,
+                'adjusted_utility': agent.adjusted_utility,
             })
 
         # Step 5: Log metrics
@@ -678,6 +699,97 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
                 all_responses.append((text, is_valid))
 
         return all_responses
+
+    async def _batch_satisfaction_assessments(self, timestep: int) -> None:
+        """Batch satisfaction assessments for all workers.
+
+        After utility is calculated, each worker evaluates whether they are
+        satisfied with the current tax policy. This mirrors the satisfaction
+        mechanism from worker.py:
+          - YES → satisfaction = 1.0 (utility unchanged)
+          - NO  → satisfaction = 0.5 (adjusted_utility halved)
+
+        The adjusted_utility is used for the labor direction nudge, creating
+        a feedback loop where workers respond to tax policy changes.
+        """
+        system_prompts = []
+        user_prompts = []
+
+        for agent in self.state.agent_states:
+            sys_prompt = (
+                f"You are {agent.name}, a citizen of Princetonia.\n"
+                f"{agent.persona_prompt}\n"
+            )
+
+            # Build summary of this year's outcomes
+            year_summary = (
+                f"This year's summary:\n"
+                f"  skill s = {agent.skill:.2f}\n"
+                f"  labor l = {agent.labor:.0f} hours\n"
+                f"  pre-tax income z = ${agent.income:.2f}\n"
+                f"  tax paid = ${agent.tax_paid:.2f}\n"
+                f"  rebate received = ${self.state.rebate_per_agent:.2f}\n"
+                f"  post-tax income z~ = ${agent.post_tax_income:.2f}\n"
+                f"  effective tax rate = {(agent.tax_paid / max(agent.income, 1.0)) * 100:.1f}%\n"
+                f"  isoelastic utility u~ = {agent.utility:.2f}\n"
+            )
+
+            user_prompt = (
+                f"{year_summary}\n"
+                "Based on your summary of this year, are you satisfied with the "
+                "overall tax policy (including tax paid and rebate)?\n"
+                "Let's think step by step. Your thought should be no more than "
+                "4 sentences. Use the JSON format: "
+                '{\"thought\": \"<step-by-step-thinking>\", \"ANSWER\": \"X\"} '
+                'and replace \"X\" with \"YES\" or \"NO\".\n'
+            )
+
+            system_prompts.append(sys_prompt)
+            user_prompts.append(user_prompt)
+
+        # Batch inference
+        all_responses = []
+        for batch_start in range(0, self.num_agents, self.batch_size):
+            batch_end = min(batch_start + self.batch_size, self.num_agents)
+            batch = BatchRequest(
+                request_ids=[f"{self._instance_id}_satisfaction_{i}" for i in range(batch_start, batch_end)],
+                prompts=user_prompts[batch_start:batch_end],
+                system_prompts=system_prompts[batch_start:batch_end],
+                temperatures=[0.7] * (batch_end - batch_start),
+                max_tokens=256,
+                json_format=True,
+            )
+            response = await self.engine.generate_batch(batch)
+            for text, is_valid in zip(response.responses, response.is_json_valid):
+                all_responses.append((text, is_valid))
+
+        # Parse satisfaction responses
+        satisfied_count = 0
+        unsatisfied_count = 0
+        parse_fail = 0
+        for i, (response, _) in enumerate(all_responses):
+            agent = self.state.agent_states[i]
+            try:
+                data = json.loads(response)
+                answer = str(data.get('ANSWER', data.get('answer', ''))).lower()
+                if 'yes' in answer:
+                    agent.satisfaction = 1.0
+                    satisfied_count += 1
+                elif 'no' in answer:
+                    agent.satisfaction = 0.5
+                    unsatisfied_count += 1
+                else:
+                    agent.satisfaction = 1.0  # Default to satisfied on parse ambiguity
+                    parse_fail += 1
+            except (json.JSONDecodeError, KeyError, TypeError):
+                agent.satisfaction = 1.0  # Default to satisfied on parse failure
+                parse_fail += 1
+
+            agent.adjusted_utility = agent.utility * agent.satisfaction
+
+        if self.debug or timestep % 50 == 0:
+            logger.info(f"  Satisfaction step {timestep}: {satisfied_count} YES, "
+                       f"{unsatisfied_count} NO, {parse_fail} parse failures")
 
     async def _update_tax_rates(self, timestep: int):
         """Update tax rates via planner LLM call."""
@@ -791,6 +903,8 @@ Respond with JSON: {{"tax_rates": [rate1, rate2, ...], "reasoning": "<explanatio
             'rebate': self.state.rebate_per_agent,
             'tax_rates': self.state.tax_rates.copy(),
             'step_time': step_time,
+            'satisfaction_rate': np.mean([a.satisfaction for a in self.state.agent_states]),
+            'mean_adjusted_utility': np.mean([a.adjusted_utility for a in self.state.agent_states]),
         }
 
     async def run(self) -> List[Dict]:
