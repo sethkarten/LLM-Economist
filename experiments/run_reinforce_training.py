@@ -140,13 +140,11 @@ class FixedPopulation:
         incomes = rGB2(num_agents)
         self.skills = [float(inc / 40.0) for inc in incomes]
 
-        # Generate personas with fixed seed (no LLM narratives for speed)
-        from llm_economist.agents.persona_generator import generate_aligned_personas
-        self.personas = generate_aligned_personas(
-            n=num_agents,
-            use_llm_narratives=False,
-            seed=seed,
-        )
+        # Personas are NOT injected here — AsyncLLMEconomist will use
+        # ROLE_MESSAGES (hand-crafted personas with explicit tax opinions)
+        # by default when fixed_personas=None. This ensures the RL training
+        # uses the same realistic worker behavior as grid search evaluation.
+        self.personas = None
 
 
 # =============================================================================
