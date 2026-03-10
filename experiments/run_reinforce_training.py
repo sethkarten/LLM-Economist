@@ -103,6 +103,7 @@ class TrainingConfig:
     worker_model: str = "Qwen/Qwen3-8B-AWQ"
     num_agents: int = 32
     bracket_setting: str = "three"  # flat (1), three (3), or US_FED (7)
+    swf_weighting: str = "rawlsian"  # rawlsian or utilitarian
     num_rollouts: int = 16          # batch size per iteration
     tax_year_length: int = 64       # simulation steps per tax year
     num_tax_years: int = 4          # rollout = num_tax_years * tax_year_length steps
@@ -544,6 +545,7 @@ class RolloutEnvironment:
             fixed_skills=self.population.skills,
             fixed_personas=self.population.personas,
             bracket_setting=self.config.bracket_setting,
+            swf_weighting=self.config.swf_weighting,
             gpu_memory_utilization=gpu_mem_util,
             history_len=5,
             max_model_len=8192,
@@ -875,9 +877,9 @@ class REINFORCETrainer:
         if self.config.use_wandb:
             wandb.init(
                 project='llm-economist',
-                name=f'reinforce_v2_{self.config.bracket_setting}_seed{self.config.seed}',
+                name=f'reinforce_v2_{self.config.bracket_setting}_{self.config.swf_weighting}_seed{self.config.seed}',
                 config=config_dict,
-                tags=['reinforce_v2', f'seed_{self.config.seed}', self.config.bracket_setting],
+                tags=['reinforce_v2', f'seed_{self.config.seed}', self.config.bracket_setting, self.config.swf_weighting],
             )
 
         for iteration in range(self.config.num_iterations):
@@ -983,6 +985,9 @@ def parse_args():
     parser.add_argument('--bracket-setting', type=str, default='three',
                         choices=['flat', 'three', 'US_FED'],
                         help='Tax bracket configuration')
+    parser.add_argument('--swf-weighting', type=str, default='rawlsian',
+                        choices=['rawlsian', 'utilitarian'],
+                        help='Social welfare function weighting')
     parser.add_argument('--num-rollouts', type=int, default=16,
                         help='Rollouts (batch size) per training iteration')
     parser.add_argument('--tax-year-length', type=int, default=64,
@@ -1020,6 +1025,7 @@ async def main():
         worker_model=args.worker_model,
         num_agents=args.num_agents,
         bracket_setting=args.bracket_setting,
+        swf_weighting=args.swf_weighting,
         num_rollouts=args.num_rollouts,
         tax_year_length=args.tax_year_length,
         num_tax_years=args.num_tax_years,
@@ -1041,6 +1047,7 @@ async def main():
     print(f"Workers:         {config.worker_model}")
     print(f"Agents:          {config.num_agents}")
     print(f"Brackets:        {config.bracket_setting}")
+    print(f"SWF weighting:   {config.swf_weighting}")
     print(f"Rollouts/iter:   {config.num_rollouts}")
     print(f"Tax year length: {config.tax_year_length}")
     print(f"Tax years:       {config.num_tax_years}")

@@ -41,6 +41,7 @@ async def main_async(args):
         seed=args.seed,
         external_planner=False,  # Use LLM planner (ICRL)
         bracket_setting=args.bracket_setting,
+        swf_weighting=args.swf_weighting,
         history_len=args.history_len,
         gpu_memory_utilization=0.95,
         max_model_len=args.max_model_len,
@@ -70,6 +71,7 @@ def main():
     parser.add_argument('--tax-year-length', type=int, default=25)
     parser.add_argument('--model', type=str, default='Qwen/Qwen3-8B-AWQ')
     parser.add_argument('--bracket-setting', type=str, default='three')
+    parser.add_argument('--swf-weighting', type=str, choices=['rawlsian', 'utilitarian'], default='rawlsian')
     parser.add_argument('--history-len', type=int, default=64)
     parser.add_argument('--max-model-len', type=int, default=8192)
     parser.add_argument('--gpu', type=str, default=None)
