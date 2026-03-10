@@ -127,6 +127,7 @@ async def main_async(args):
         swf_weighting=args.swf_weighting,
         gpu_memory_utilization=0.85,
         history_len=args.history_len,
+        max_model_len=8192,
     )
     await sim.initialize()
 
