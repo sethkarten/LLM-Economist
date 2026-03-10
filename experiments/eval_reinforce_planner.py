@@ -209,6 +209,7 @@ async def run_evaluation(
         bracket_setting=bracket_setting,
         swf_weighting=swf_weighting,
         gpu_memory_utilization=gpu_memory_util,
+        max_model_len=8192,
     )
     await sim.initialize()
 
