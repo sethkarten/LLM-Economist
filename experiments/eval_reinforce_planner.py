@@ -169,6 +169,7 @@ async def run_evaluation(
     max_timesteps: int = 2000,
     tax_year_length: int = 128,
     bracket_setting: str = "three",
+    swf_weighting: str = "rawlsian",
     worker_model: str = "Qwen/Qwen3-8B-AWQ",
     baseline_only: bool = False,
     planner_device: str = "cuda:0",
@@ -206,6 +207,7 @@ async def run_evaluation(
         seed=seed,
         external_planner=True,
         bracket_setting=bracket_setting,
+        swf_weighting=swf_weighting,
         gpu_memory_utilization=gpu_memory_util,
     )
     await sim.initialize()
@@ -313,6 +315,7 @@ async def run_evaluation(
             'max_timesteps': max_timesteps,
             'tax_year_length': tax_year_length,
             'bracket_setting': bracket_setting,
+            'swf_weighting': swf_weighting,
             'worker_model': worker_model,
         },
     }
@@ -327,6 +330,9 @@ def main():
     parser.add_argument('--max-timesteps', type=int, default=2000)
     parser.add_argument('--tax-year-length', type=int, default=128)
     parser.add_argument('--bracket-setting', type=str, default='three')
+    parser.add_argument('--swf-weighting', type=str, default='rawlsian',
+                        choices=['rawlsian', 'utilitarian'],
+                        help='Social welfare function weighting')
     parser.add_argument('--worker-model', type=str, default='Qwen/Qwen3-8B-AWQ')
     parser.add_argument('--baseline-only', action='store_true')
     parser.add_argument('--output', type=str, default=None)
@@ -342,6 +348,7 @@ def main():
         max_timesteps=args.max_timesteps,
         tax_year_length=args.tax_year_length,
         bracket_setting=args.bracket_setting,
+        swf_weighting=args.swf_weighting,
         worker_model=args.worker_model,
         baseline_only=args.baseline_only,
         worker_gpu=args.worker_gpu,

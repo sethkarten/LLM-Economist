@@ -58,6 +58,31 @@ RATE_SCHEDULES = {
     "max_all":           [0.99, 0.99, 0.99],
 }
 
+# 7-bracket (US_FED) rate schedules: [10%, 12%, 22%, 24%, 32%, 35%, 37%] bracket thresholds
+RATE_SCHEDULES_7 = {
+    # Baselines
+    "us_federal_actual":   [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37],
+    "flat_30_7":           [0.30, 0.30, 0.30, 0.30, 0.30, 0.30, 0.30],
+
+    # Progressive
+    "prog_mild_7":         [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35],
+    "prog_steep_7":        [0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80],
+    "max_progressive_7":   [0.10, 0.20, 0.40, 0.60, 0.80, 0.90, 0.95],
+
+    # Flat extremes
+    "low_flat_7":          [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15],
+    "high_flat_7":         [0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70],
+    "near_max_7":          [0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90],
+    "max_all_7":           [0.99, 0.99, 0.99, 0.99, 0.99, 0.99, 0.99],
+
+    # U-shape / Regressive
+    "u_shape_7":           [0.30, 0.15, 0.10, 0.15, 0.25, 0.40, 0.60],
+    "regressive_7":        [0.50, 0.40, 0.30, 0.25, 0.20, 0.15, 0.10],
+
+    # REINFORCE-style progressive
+    "reinforce_style_7":   [0.20, 0.25, 0.35, 0.45, 0.55, 0.65, 0.80],
+}
+
 
 async def run_fixed_rates(sim, rates, max_timesteps, tax_year_length):
     """Run simulation with fixed tax rates and return final SWF/Gini."""
@@ -98,7 +123,8 @@ async def main_async(args):
         batch_size=args.num_agents,
         seed=args.seed,
         external_planner=True,
-        bracket_setting="three",
+        bracket_setting=args.bracket_setting,
+        swf_weighting=args.swf_weighting,
         gpu_memory_utilization=0.85,
         history_len=args.history_len,
     )
@@ -111,7 +137,11 @@ async def main_async(args):
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
     results = {}
-    schedules = list(RATE_SCHEDULES.items())
+    if args.bracket_setting == "US_FED":
+        schedule_dict = RATE_SCHEDULES_7
+    else:
+        schedule_dict = RATE_SCHEDULES
+    schedules = list(schedule_dict.items())
     total = len(schedules)
 
     print(f"\n=== Grid search: {total} rate schedules, {args.max_timesteps} steps each ===\n")
@@ -151,6 +181,8 @@ async def main_async(args):
         'max_timesteps': args.max_timesteps,
         'tax_year_length': args.tax_year_length,
         'worker_model': args.worker_model,
+        'swf_weighting': args.swf_weighting,
+        'bracket_setting': args.bracket_setting,
         'num_schedules': total,
         'results': results,
         'ranking': [{'rank': i+1, 'name': name, **r} for i, (name, r) in enumerate(sorted_results)],
@@ -167,6 +199,12 @@ def main():
     parser.add_argument('--worker-model', type=str, default='Qwen/Qwen3-8B-AWQ')
     parser.add_argument('--history-len', type=int, default=5,
                         help='Number of recent timesteps to include in worker prompts')
+    parser.add_argument('--swf-weighting', type=str, default='rawlsian',
+                        choices=['rawlsian', 'utilitarian'],
+                        help='Social welfare function weighting')
+    parser.add_argument('--bracket-setting', type=str, default='three',
+                        choices=['flat', 'three', 'US_FED'],
+                        help='Tax bracket configuration')
     parser.add_argument('--worker-gpu', type=str, default=None)
     parser.add_argument('--output', type=str, default=None)
     args = parser.parse_args()
