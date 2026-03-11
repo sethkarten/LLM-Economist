@@ -124,6 +124,8 @@ class AsyncLLMEconomist:
 
         # Unique instance ID to prevent request ID collisions when sharing a vLLM engine
         self._instance_id = uuid.uuid4().hex[:8]
+        # Reset counter used to bust vLLM prefix cache across reset_state() calls
+        self._reset_count = 0
 
         # Fixed population (injected from outside for RL training)
         self._fixed_skills = fixed_skills
@@ -267,6 +269,7 @@ class AsyncLLMEconomist:
         """Reset agent states to initial conditions without reinitializing vLLM or personas.
 
         Enables reuse across RL rollouts: same population, fresh economic state.
+        Generates a new instance ID to bust vLLM prefix cache across resets.
         """
         from llm_economist.utils.bracket import get_num_brackets
         num_b = get_num_brackets(self.bracket_setting)
@@ -289,10 +292,29 @@ class AsyncLLMEconomist:
         self.metrics_history = []
         self.planner_history = []
 
+        # New instance ID busts vLLM prefix cache across resets
+        self._instance_id = uuid.uuid4().hex[:8]
+        # Increment reset counter for prompt cache-busting
+        self._reset_count = getattr(self, '_reset_count', 0) + 1
+
     def _sample_skills(self) -> List[float]:
-        """Sample skills from GB2 distribution (US income calibrated)."""
-        # Use GB2 distribution fitted to US ACS data
-        incomes = rGB2(self.num_agents)
+        """Sample skills from GB2 distribution (US income calibrated).
+
+        For US_FED bracket setting, uses stratified sampling to guarantee
+        minimum agents per bracket (at 40h default labor). This ensures
+        all 7 brackets have meaningful representation.
+        """
+        from .utils.common import rGB2_stratified
+
+        if self.bracket_setting == 'US_FED':
+            # Stratified sampling ensures all brackets populated
+            incomes = rGB2_stratified(
+                self.num_agents,
+                brackets=self.tax_brackets,
+                min_per_bracket=max(5, self.num_agents // 20),
+            )
+        else:
+            incomes = rGB2(self.num_agents)
         # Convert to hourly skill (income at 40 hrs/week)
         skills = [float(inc / 40.0) for inc in incomes]
         return skills
@@ -327,7 +349,7 @@ class AsyncLLMEconomist:
         bracket_detail = "\n".join(bracket_detail_lines)
 
         system_prompt = (
-            f"You are {agent.name}, a citizen of Princetonia. "
+            f"You are {agent.name}, a citizen of Princetonia (year {self._reset_count}). "
             f"Your skill level is {agent.skill:.2f} with an expected income of "
             f"{agent.skill * 40:.2f} at 40 hours of labor each week.\n"
             f"{agent.persona_prompt}\n"
