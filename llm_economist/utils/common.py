@@ -161,6 +161,100 @@ def rGB2(n, mu=72402.78177917618, sigma=2.0721070746154746, nu=0.486518719593869
     
     return r
 
+def rGB2_stratified(n, brackets, min_per_bracket=5,
+                     mu=72402.78177917618, sigma=2.0721070746154746,
+                     nu=0.48651871959386955, tau=1.1410398548220329):
+    """Sample from GB2 with guaranteed minimum agents per tax bracket.
+
+    Uses stratified sampling: computes the GB2 CDF at each bracket boundary,
+    then samples uniformly within each bracket's CDF range. Agents beyond
+    the minimum per bracket are allocated proportionally to the natural
+    GB2 density (preserving the ACS shape).
+
+    Parameters
+    ----------
+    n : int
+        Total number of samples.
+    brackets : list[float]
+        Bracket boundaries (e.g. [0, 11600, 47150, ..., 10000000]).
+    min_per_bracket : int
+        Minimum agents guaranteed per bracket.
+    mu, sigma, nu, tau : float
+        GB2 parameters (default: US ACS 2023).
+
+    Returns
+    -------
+    incomes : np.ndarray of shape (n,)
+    """
+    num_brackets = len(brackets) - 1
+    total_reserved = min_per_bracket * num_brackets
+    if total_reserved > n:
+        min_per_bracket = max(1, n // num_brackets)
+        total_reserved = min_per_bracket * num_brackets
+
+    # Compute CDF at each bracket boundary using the quantile function inverse
+    # F(x) for GB2: use scipy Beta distribution of the second kind
+    # GB2 CDF: F(x) = I_{v}(nu, tau) where v = 1/(1 + (tau/nu)*(x/mu)^{-sigma})
+    bracket_cdfs = []
+    for b in brackets:
+        if b <= 0:
+            bracket_cdfs.append(0.0)
+        elif b >= 10_000_000:
+            bracket_cdfs.append(1.0)
+        else:
+            # CDF of GB2: P(X <= x) = Beta.cdf(v, nu, tau)
+            # where v = (x/mu)^sigma / ((x/mu)^sigma + 1)
+            ratio = (b / mu) ** sigma
+            v = ratio / (ratio + 1.0)
+            cdf_val = float(stats.beta.cdf(v, nu, tau))
+            bracket_cdfs.append(cdf_val)
+
+    # Compute natural proportions and allocate agents
+    natural_proportions = []
+    for i in range(num_brackets):
+        natural_proportions.append(bracket_cdfs[i + 1] - bracket_cdfs[i])
+
+    # Allocate: min_per_bracket guaranteed, rest proportional to natural density
+    remaining = n - total_reserved
+    allocations = [min_per_bracket] * num_brackets
+    if remaining > 0:
+        # Distribute remaining proportionally
+        total_prop = sum(natural_proportions)
+        for i in range(num_brackets):
+            extra = int(round(remaining * natural_proportions[i] / total_prop))
+            allocations[i] += extra
+        # Fix rounding to match n exactly
+        diff = n - sum(allocations)
+        # Add/subtract from the largest bracket
+        largest = int(np.argmax(natural_proportions))
+        allocations[largest] += diff
+
+    # Sample within each bracket's CDF range
+    samples = []
+    for i in range(num_brackets):
+        lo_cdf = bracket_cdfs[i]
+        hi_cdf = bracket_cdfs[i + 1]
+        k = allocations[i]
+        if k <= 0:
+            continue
+        # Uniform samples in [lo_cdf, hi_cdf], then transform via quantile
+        eps = 1e-8
+        lo_cdf = max(lo_cdf, eps)
+        hi_cdf = min(hi_cdf, 1.0 - eps)
+        if lo_cdf >= hi_cdf:
+            # Degenerate bracket — sample at midpoint
+            u = np.full(k, (lo_cdf + hi_cdf) / 2)
+        else:
+            u = np.random.uniform(lo_cdf, hi_cdf, size=k)
+        bracket_samples = qGB2(u, mu=mu, sigma=sigma, nu=nu, tau=tau)
+        samples.extend(bracket_samples)
+
+    # Shuffle to avoid ordering artifacts
+    result = np.array(samples[:n], dtype=float)
+    np.random.shuffle(result)
+    return result
+
+
 def linear_transform(samples, old_min, old_max, new_min, new_max):
     """Linear transformation using NumPy for efficiency"""
     samples_array = np.array(samples)

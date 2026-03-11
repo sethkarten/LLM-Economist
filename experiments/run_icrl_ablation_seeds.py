@@ -204,6 +204,48 @@ def parse_swf_from_log(condition_name: str, seed: int) -> Optional[List[float]]:
         return None
 
 
+def get_best_end_of_tax_year_swf(condition_name: str, seed: int) -> Optional[float]:
+    """Get the best SWF at end-of-tax-year boundaries.
+
+    Detects tax year boundaries by finding steps where tax_rates change.
+    Returns the max SWF at the step just before each rate change (end of tax year).
+    Falls back to max(swf_values) if boundary detection isn't possible.
+    """
+    output_dir = get_output_dir(condition_name, seed)
+    json_file = output_dir / f"{condition_name}_seed{seed}.json"
+    if json_file.exists():
+        try:
+            data = json.loads(json_file.read_text())
+            metrics = data.get('metrics_history', [])
+            if not metrics:
+                return None
+
+            # Detect tax year boundaries from tax_rates changes
+            end_of_year_swfs = []
+            prev_rates = None
+            for i, m in enumerate(metrics):
+                rates = m.get('tax_rates')
+                if prev_rates is not None and rates != prev_rates:
+                    # Step i-1 is the end of the previous tax year
+                    end_of_year_swfs.append(metrics[i - 1]['swf'])
+                prev_rates = rates
+            # Also include the final step as an end-of-year
+            if metrics:
+                end_of_year_swfs.append(metrics[-1]['swf'])
+
+            if end_of_year_swfs:
+                return max(end_of_year_swfs)
+            # If no rate changes detected, fall back to all SWF values
+            swf_values = [m['swf'] for m in metrics if 'swf' in m]
+            return max(swf_values) if swf_values else None
+        except Exception:
+            pass
+
+    # Fall back to max of all SWF values from log
+    swf_vals = parse_swf_from_log(condition_name, seed)
+    return max(swf_vals) if swf_vals else None
+
+
 def run_single(
     condition: Dict,
     seed: int,
@@ -278,9 +320,9 @@ def print_summary(seeds: List[int]):
         final_swfs = []
         completed = 0
         for seed in seeds:
-            swf_vals = parse_swf_from_log(cond["name"], seed)
-            if swf_vals:
-                final_swfs.append(swf_vals[-1])
+            best_swf = get_best_end_of_tax_year_swf(cond["name"], seed)
+            if best_swf is not None:
+                final_swfs.append(best_swf)
                 completed += 1
 
         explore_str = "OFF" if cond["disable_exploration"] else "ON"
